@@ -3,7 +3,7 @@
 **[[📃English](./README.md)]**   
 
 ## 预览
-![](./img/preview.jpg) 
+![alt text](image-1.png)
 
 ## 安装步骤
 
