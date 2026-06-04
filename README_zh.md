@@ -3,14 +3,14 @@
 **[[📃English](./README.md)]**   
 
 ## 预览
-![alt text](image-1.png)
+![preview](img/preview.jpg)
 
 ## 安装步骤
 
 #### 安装节点:
 ```bash
 cd ComfyUI/custom_nodes
-git clone https://github.com/lihaoyun6/ComfyUI-llama-cpp.git
+git clone https://github.com/heyzne/comfyui-llama-cpp.git
 python -m pip install -r ComfyUI-llama-cpp/requirements.txt
 ```
 

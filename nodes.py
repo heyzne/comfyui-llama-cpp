@@ -467,13 +467,14 @@ class llama_cpp_instruct_adv:
         return clean_messages
     
     def process(self, llama_model, preset_prompt, custom_prompt, system_prompt, inference_mode, max_frames, max_size, seed, force_offload, save_states, unique_id, parameters=None, image_1=None, image_2=None, image_3=None, image_4=None, image_5=None, image_6=None, image_7=None, image_8=None, image_9=None, image_10=None, queue_handler=None):
-        # 合并所有图像输入
-        all_images = []
+        # 合并所有图像输入，平坦化为单张图像列表（不限制尺寸）
+        images = []
         for img in [image_1, image_2, image_3, image_4, image_5,
                     image_6, image_7, image_8, image_9, image_10]:
             if img is not None:
-                all_images.append(img)
-        images = torch.cat(all_images, dim=0) if all_images else None
+                for b in range(img.shape[0]):
+                    images.append(img[b:b+1])
+        images = images if images else None
 
         if not LLAMA_CPP_STORAGE.llm:
             LLAMA_CPP_STORAGE.load_model(llama_model)

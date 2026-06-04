@@ -23,14 +23,14 @@ classifiers = [
 dependencies = ["diskcache", "scipy", "numpy", "pillow", "gguf"]
 
 [project.urls]
-Repository = "https://github.com/lihaoyun6/ComfyUI-llama-cpp_vlm"
+Repository = "https://github.com/heyzne/comfyui-llama-cpp"
 #  Used by Comfy Registry https://registry.comfy.org
-Documentation = "https://github.com/lihaoyun6/ComfyUI-llama-cpp_vlm/wiki"
-"Bug Tracker" = "https://github.com/lihaoyun6/ComfyUI-llama-cpp_vlm/issues"
+Documentation = "https://github.com/heyzne/comfyui-llama-cpp/wiki"
+"Bug Tracker" = "https://github.com/heyzne/comfyui-llama-cpp/issues"
 
 [tool.comfy]
 PublisherId = "lhy666"
-DisplayName = "ComfyUI-llama-cpp_vlm"
+DisplayName = "ComfyUI-llama-cpp"
 Icon = ""
 includes = [] 
 # "requires-comfyui" = ">=1.0.0"  # ComfyUI version compatibility
