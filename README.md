@@ -4,8 +4,7 @@ Run LLM & VLM models natively in ComfyUI based on the llama.cpp framework.
 **[[📃中文说明](./README_zh.md)]**
 
 ## Preview
-![preview](img/preview.jpg)
-
+最多可输入10张反推图片
 ## Installation
 
 #### Install Nodes:
