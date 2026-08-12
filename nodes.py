@@ -92,6 +92,9 @@ class LLAMA_CPP_STORAGE:
     #states = {}
     messages = {}
     sys_prompts = {}
+    # 自动卸载设置: 当其他模型需要加载到 GPU 且剩余显存低于阈值时, 自动卸载 llama 模型
+    auto_offload = True
+    offload_threshold_gb = 2.0
 
     @classmethod
     def clean_state(cls, id=-1):
@@ -124,7 +127,24 @@ class LLAMA_CPP_STORAGE:
         
         gc.collect()
         mm.soft_empty_cache()
-    
+
+    @classmethod
+    def auto_offload_check(cls):
+        """ComfyUI 即将把其他模型加载到 GPU 时调用:
+        若剩余显存低于阈值, 自动卸载 llama 模型, 释放显存与内存"""
+        if cls.llm is None or not cls.auto_offload:
+            return
+        try:
+            device = mm.get_torch_device()
+            if device.type != "cuda":
+                return
+            free_gb = mm.get_free_memory(device) / (1024 ** 3)
+            if free_gb < cls.offload_threshold_gb:
+                print(f"[llama-cpp_vlm] Free VRAM {free_gb:.2f} GB < threshold {cls.offload_threshold_gb:.2f} GB, auto unloading llama model to free VRAM/RAM...")
+                cls.clean()
+        except Exception as e:
+            print(f"[llama-cpp_vlm] Auto offload check failed: {e}")
+
     @classmethod
     def load_model(cls, config):
         def get_chat_handler(chat_handler):
@@ -239,6 +259,15 @@ if not hasattr(mm, "unload_all_models_backup"):
     mm.unload_all_models = patched_unload_all_models
     print("[llama-cpp_vlm] Model cleanup hook applied!")
 
+if not hasattr(mm, "load_models_gpu_backup"):
+    mm.load_models_gpu_backup = mm.load_models_gpu
+    def patched_load_models_gpu(*args, **kwargs):
+        # 其他模型上 GPU 之前, 显存不足时自动卸载 llama 模型
+        LLAMA_CPP_STORAGE.auto_offload_check()
+        return mm.load_models_gpu_backup(*args, **kwargs)
+    mm.load_models_gpu = patched_load_models_gpu
+    print("[llama-cpp_vlm] Auto VRAM offload hook applied!")
+
 llm_extensions = ['.ckpt', '.pt', '.bin', '.pth', '.safetensors', '.gguf']
 folder_paths.folder_names_and_paths["LLM"] = ([os.path.join(folder_paths.models_dir, "LLM")], llm_extensions)
 preset_prompts = {
@@ -352,6 +381,14 @@ class llama_cpp_model_loader:
             }),
             "image_min_tokens": ("INT", {"default": 0, "min": 0, "max": 4096, "step": 32}),
             "image_max_tokens": ("INT", {"default": 0, "min": 0, "max": 4096, "step": 32}),
+            "auto_offload": ("BOOLEAN", {
+                "default": True,
+                "tooltip": "当其他模型需要加载到 GPU 且剩余显存低于阈值时, 自动卸载 LLM 释放显存/内存"
+            }),
+            "offload_threshold": ("FLOAT", {
+                "default": 2.0, "min": 0.0, "max": 128.0, "step": 0.5,
+                "tooltip": "触发自动卸载的剩余显存阈值 (GB)"
+            }),
             }
         }
 
@@ -378,7 +415,10 @@ class llama_cpp_model_loader:
         config_str = json.dumps(custom_config, sort_keys=True, ensure_ascii=False)
         return config_str
     '''
-    def loadmodel(self, model, mmproj, chat_handler, n_ctx, vram_limit, image_min_tokens, image_max_tokens):
+    def loadmodel(self, model, mmproj, chat_handler, n_ctx, vram_limit, image_min_tokens, image_max_tokens, auto_offload=True, offload_threshold=2.0):
+        # 更新自动卸载设置 (不参与 config 比对, 切换开关不会触发模型重载)
+        LLAMA_CPP_STORAGE.auto_offload = auto_offload
+        LLAMA_CPP_STORAGE.offload_threshold_gb = offload_threshold
         custom_config = {
             "model": model,
             "mmproj": mmproj,
@@ -445,7 +485,6 @@ class llama_cpp_instruct_adv:
                 "image_8": ("IMAGE", {"tooltip": "Input image 8"}),
                 "image_9": ("IMAGE", {"tooltip": "Input image 9"}),
                 "image_10": ("IMAGE", {"tooltip": "Input image 10"}),
-                "queue_handler": (any_type, {"tooltip": "Used to control the execution order of instruct nodes."}),
             },
             
         }
@@ -466,7 +505,7 @@ class llama_cpp_instruct_adv:
                         item["image_url"]["url"] = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAACXBIWXMAAAsTAAALEwEAmpwYAAAADElEQVQImWP4//8/AAX+Av5Y8msOAAAAAElFTkSuQmCC"
         return clean_messages
     
-    def process(self, llama_model, preset_prompt, custom_prompt, system_prompt, inference_mode, max_frames, max_size, seed, force_offload, save_states, unique_id, parameters=None, image_1=None, image_2=None, image_3=None, image_4=None, image_5=None, image_6=None, image_7=None, image_8=None, image_9=None, image_10=None, queue_handler=None):
+    def process(self, llama_model, preset_prompt, custom_prompt, system_prompt, inference_mode, max_frames, max_size, seed, force_offload, save_states, unique_id, parameters=None, image_1=None, image_2=None, image_3=None, image_4=None, image_5=None, image_6=None, image_7=None, image_8=None, image_9=None, image_10=None):
         # 合并所有图像输入，平坦化为单张图像列表（不限制尺寸）
         images = []
         for img in [image_1, image_2, image_3, image_4, image_5,
