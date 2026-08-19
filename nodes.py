@@ -60,6 +60,14 @@ try:
     chat_handlers += ["Qwen3.5", "Qwen3.5-Thinking"]
 except:
     Qwen35ChatHandler = None
+
+# ===== Qwen3.8 支持（复用 Qwen35ChatHandler + 模板适配）=====
+try:
+    from llama_cpp.llama_chat_format import Qwen35ChatHandler as _Qwen35CH  # noqa: F811
+    chat_handlers += ["Qwen3.8"]
+except Exception:
+    pass
+# ==========================================================
     
 try:
     from llama_cpp.llama_chat_format import (GLM46VChatHandler, LFM2VLChatHandler, GLM41VChatHandler)
@@ -84,6 +92,8 @@ except:
 class AnyType(str):
     def __ne__(self, __value: object) -> bool:
         return False
+
+any_type = AnyType("*")
 
 class LLAMA_CPP_STORAGE:
     llm = None
@@ -150,6 +160,10 @@ class LLAMA_CPP_STORAGE:
         def get_chat_handler(chat_handler):
             match chat_handler:
                 case "Qwen3.5"|"Qwen3.5-Thinking":
+                    return Qwen35ChatHandler
+                case "Qwen3.8":
+                    if Qwen35ChatHandler is None:
+                        raise RuntimeError("Qwen3.8 requires Qwen35ChatHandler. Please upgrade llama-cpp-python to >= 0.3.47")
                     return Qwen35ChatHandler
                 case "Qwen3-VL"|"Qwen3-VL-Thinking":
                     return Qwen3VLChatHandler
@@ -226,6 +240,13 @@ class LLAMA_CPP_STORAGE:
                 kwargs["image_min_tokens"] = image_min_tokens
             elif chat_handler in ["MiniCPM-v4.5", "GLM-4.6V", "Qwen3.5"]:
                 kwargs["enable_thinking"] = think_mode
+            elif chat_handler == "Qwen3.8":
+                # Qwen3.8 复用 Qwen35ChatHandler，需启用 thinking 参数
+                kwargs["enable_thinking"] = think_mode
+                if image_max_tokens > 0:
+                    kwargs["image_max_tokens"] = image_max_tokens
+                if image_min_tokens > 0:
+                    kwargs["image_min_tokens"] = image_min_tokens
 
             if _MTMD:
                 kwargs["image_max_tokens"] = image_max_tokens
@@ -246,9 +267,76 @@ class LLAMA_CPP_STORAGE:
         
         print(f"[llama-cpp_vlm] Loading model: {model}")
         print(f"[llama-cpp_vlm] n_gpu_layers = {n_gpu_layers}")
-        cls.llm = Llama(model_path, chat_handler=cls.chat_handler, n_gpu_layers=n_gpu_layers, n_ctx=n_ctx, verbose=False)
+        print(f"[llama-cpp_vlm] chat_handler = {chat_handler}")
 
-any_type = AnyType("*")
+        # 诊断信息：检查 llama-cpp-python 版本和 GGUF 文件
+        try:
+            import llama_cpp
+            ver = getattr(llama_cpp, "__version__", "unknown")
+            print(f"[llama-cpp_vlm] llama-cpp-python version: {ver}")
+        except Exception:
+            ver = "unknown"
+
+        # 检查 GGUF 文件头和大小
+        try:
+            import struct
+            file_size = os.path.getsize(model_path)
+            with open(model_path, 'rb') as f_check:
+                magic = f_check.read(4)
+                gguf_ver = struct.unpack('<I', f_check.read(4))[0] if len(magic) == 4 else 0
+            print(f"[llama-cpp_vlm] GGUF file: {file_size/1024/1024:.1f} MB, magic={magic}, version={gguf_ver}")
+            if magic != b'GGUF':
+                print(f"[ERROR] Invalid GGUF file (magic={magic}), file may be corrupted or not a GGUF model!")
+        except Exception as e:
+            print(f"[llama-cpp_vlm] Could not inspect GGUF file: {e}")
+
+        # Qwen3.5/3.8 等 qwen35 架构模型需要特殊处理
+        # 注意：Unsloth 导出的 Qwen3.5/3.8 GGUF 存在已知 ssm_conv1d.weight 缺失问题，
+        # 如果加载失败，请尝试从其他来源下载 GGUF（如 bartowski 或官方源）
+        extra_kwargs = {}
+        if chat_handler in ["Qwen3.8", "Qwen3.5", "Qwen3.5-Thinking"]:
+            # Qwen3.8 需要 load_mtp=True 加载 MTP/NextN 张量
+            if chat_handler == "Qwen3.8":
+                extra_kwargs["load_mtp"] = True
+                print(f"[llama-cpp_vlm] Qwen3.8 detected, enabling load_mtp=True")
+
+            # 检查版本
+            try:
+                from packaging import version
+                if version.parse(ver) < version.parse("0.3.45"):
+                    print(f"[WARNING] {chat_handler} requires llama-cpp-python >= 0.3.45, current: {ver}")
+            except Exception:
+                pass
+
+        # 构建 Llama 初始化参数，clip_model_path 必须在这里传递才能启用多模态
+        llama_kwargs = {
+            "chat_handler": cls.chat_handler,
+            "n_gpu_layers": n_gpu_layers,
+            "n_ctx": n_ctx,
+            "verbose": False,
+        }
+        if mmproj_path is not None:
+            llama_kwargs["clip_model_path"] = mmproj_path
+        llama_kwargs.update(extra_kwargs)
+
+        try:
+            cls.llm = Llama(model_path, **llama_kwargs)
+        except ValueError as e:
+            if "Failed to load model from file" in str(e):
+                print("[ERROR] Model loading failed: " + str(e))
+                print("[ERROR] This is often caused by:")
+                print("  1. Corrupted GGUF file - re-download the model")
+                print("  2. Incompatible llama.cpp version - current: " + str(ver))
+                print("  3. Unsloth-exported Qwen3.5/3.8 GGUF has known ssm_conv1d.weight missing bug")
+                print("     Try downloading from bartowski or official Qwen HF repo instead")
+                print("  4. CUDA shared library mismatch - try reinstalling from source:")
+                print(r'     CMAKE_ARGS="-DGGML_CUDA=ON" pip install --force-reinstall --no-cache-dir')
+                print(r'       "llama-cpp-python @ git+https://github.com/JamePeng/llama-cpp-python.git"')
+                print("[DEBUG] Full traceback:")
+                import traceback
+                traceback.print_exc()
+            raise
+
 
 if not hasattr(mm, "unload_all_models_backup"):
     mm.unload_all_models_backup = mm.unload_all_models
@@ -572,8 +660,13 @@ class llama_cpp_instruct_adv:
             user_content.append({"type": "text", "text": p})
             
         if images is not None:
-            if not hasattr(LLAMA_CPP_STORAGE.chat_handler, "clip_model_path") or LLAMA_CPP_STORAGE.chat_handler.clip_model_path is None:
-                 raise ValueError("Image input detected, but the loaded model is not configured with a mmproj module.")
+            # 检查是否配置了 mmproj（通过 current_config，因为 clip_model_path 已传给 Llama 初始化）
+            has_mmproj = (
+                LLAMA_CPP_STORAGE.current_config is not None
+                and LLAMA_CPP_STORAGE.current_config.get("mmproj") is not None
+            )
+            if not has_mmproj:
+                raise ValueError("Image input detected, but the loaded model is not configured with a mmproj module.")
                 
             frames = images
             if video_input:
@@ -646,6 +739,15 @@ class llama_cpp_instruct_adv:
                 LLAMA_CPP_STORAGE.llm._ctx.memory_clear(True)
                 if LLAMA_CPP_STORAGE.llm.is_hybrid and LLAMA_CPP_STORAGE.llm._hybrid_cache_mgr is not None:
                     LLAMA_CPP_STORAGE.llm._hybrid_cache_mgr.clear()
+            elif LLAMA_CPP_STORAGE.current_config["chat_handler"] == "Qwen3.8":
+                # Qwen3.8 同样需要手动清空 KV cache，否则下次推理会出错
+                try:
+                    LLAMA_CPP_STORAGE.llm.n_tokens = 0
+                    LLAMA_CPP_STORAGE.llm._ctx.memory_clear(True)
+                    if getattr(LLAMA_CPP_STORAGE.llm, "is_hybrid", False) and                        getattr(LLAMA_CPP_STORAGE.llm, "_hybrid_cache_mgr", None) is not None:
+                        LLAMA_CPP_STORAGE.llm._hybrid_cache_mgr.clear()
+                except Exception:
+                    pass
             
         del messages
         gc.collect()
