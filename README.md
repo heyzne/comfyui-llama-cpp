@@ -4,7 +4,7 @@ Run LLM & VLM models natively in ComfyUI based on the llama.cpp framework.
 **[[📃中文说明](./README_zh.md)]**
 
 ## Preview
-最多可输入10张反推图片
+最多可输入6张反推图片
 ## Installation
 
 #### Install Nodes:
@@ -60,6 +60,7 @@ python -m pip install -r ComfyUI-llama-cpp/requirements.txt
 - Gemma3 / Gemma4
 - Qwen2.5-VL / Qwen3-VL / Qwen3-VL-Thinking
 - Qwen3.5 / Qwen3.5-Thinking
+- Qwen3.8
 - GLM-4.1V-Thinking / GLM-4.6V / GLM-4.6V-Thinking
 - LFM2-VL / LFM2.5-VL
 - Granite-Docling
