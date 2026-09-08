@@ -1,0 +1,72 @@
+diskcache
+scipy
+numpy
+pillow
+gguf
+tqdm
+
+# ============================================================
+# llama-cpp-python v0.3.49 (JamePeng 预编译轮子, 2026-08-31)
+# 包含 CUDA 12.4 / 12.6 / 12.8 / 13.0 全部变体。
+#
+# 注意: 同一平台+Python 版本只能【启用一组】CUDA 轮子 ——
+# 多条同名的直接 URL 同时启用会让 pip 报版本冲突错误。
+# 默认启用: Windows = cu130, Linux = cu128 (官方无 cu130 Linux 轮子)。
+# 如需切换 CUDA 版本: 注释掉当前启用组, 取消目标组的注释即可。
+# ============================================================
+
+# ---------- Windows CUDA 13.0 (默认启用) ----------
+llama-cpp-python @ https://github.com/JamePeng/llama-cpp-python/releases/download/v0.3.49-cu130-win-20260831/llama_cpp_python-0.3.49+cu130-cp310-cp310-win_amd64.whl; python_version == "3.10" and platform_system == "Windows"
+llama-cpp-python @ https://github.com/JamePeng/llama-cpp-python/releases/download/v0.3.49-cu130-win-20260831/llama_cpp_python-0.3.49+cu130-cp311-cp311-win_amd64.whl; python_version == "3.11" and platform_system == "Windows"
+llama-cpp-python @ https://github.com/JamePeng/llama-cpp-python/releases/download/v0.3.49-cu130-win-20260831/llama_cpp_python-0.3.49+cu130-cp312-cp312-win_amd64.whl; python_version == "3.12" and platform_system == "Windows"
+llama-cpp-python @ https://github.com/JamePeng/llama-cpp-python/releases/download/v0.3.49-cu130-win-20260831/llama_cpp_python-0.3.49+cu130-cp313-cp313-win_amd64.whl; python_version == "3.13" and platform_system == "Windows"
+llama-cpp-python @ https://github.com/JamePeng/llama-cpp-python/releases/download/v0.3.49-cu130-win-20260831/llama_cpp_python-0.3.49+cu130-cp314-cp314-win_amd64.whl; python_version == "3.14" and platform_system == "Windows"
+
+# ---------- Windows CUDA 12.8 (备用, 取消注释启用) ----------
+# llama-cpp-python @ https://github.com/JamePeng/llama-cpp-python/releases/download/v0.3.49-cu128-win-20260831/llama_cpp_python-0.3.49+cu128-cp310-cp310-win_amd64.whl; python_version == "3.10" and platform_system == "Windows"
+# llama-cpp-python @ https://github.com/JamePeng/llama-cpp-python/releases/download/v0.3.49-cu128-win-20260831/llama_cpp_python-0.3.49+cu128-cp311-cp311-win_amd64.whl; python_version == "3.11" and platform_system == "Windows"
+# llama-cpp-python @ https://github.com/JamePeng/llama-cpp-python/releases/download/v0.3.49-cu128-win-20260831/llama_cpp_python-0.3.49+cu128-cp312-cp312-win_amd64.whl; python_version == "3.12" and platform_system == "Windows"
+# llama-cpp-python @ https://github.com/JamePeng/llama-cpp-python/releases/download/v0.3.49-cu128-win-20260831/llama_cpp_python-0.3.49+cu128-cp313-cp313-win_amd64.whl; python_version == "3.13" and platform_system == "Windows"
+# llama-cpp-python @ https://github.com/JamePeng/llama-cpp-python/releases/download/v0.3.49-cu128-win-20260831/llama_cpp_python-0.3.49+cu128-cp314-cp314-win_amd64.whl; python_version == "3.14" and platform_system == "Windows"
+
+# ---------- Windows CUDA 12.6 (备用, 取消注释启用) ----------
+# llama-cpp-python @ https://github.com/JamePeng/llama-cpp-python/releases/download/v0.3.49-cu126-win-20260831/llama_cpp_python-0.3.49+cu126-cp310-cp310-win_amd64.whl; python_version == "3.10" and platform_system == "Windows"
+# llama-cpp-python @ https://github.com/JamePeng/llama-cpp-python/releases/download/v0.3.49-cu126-win-20260831/llama_cpp_python-0.3.49+cu126-cp311-cp311-win_amd64.whl; python_version == "3.11" and platform_system == "Windows"
+# llama-cpp-python @ https://github.com/JamePeng/llama-cpp-python/releases/download/v0.3.49-cu126-win-20260831/llama_cpp_python-0.3.49+cu126-cp312-cp312-win_amd64.whl; python_version == "3.12" and platform_system == "Windows"
+# llama-cpp-python @ https://github.com/JamePeng/llama-cpp-python/releases/download/v0.3.49-cu126-win-20260831/llama_cpp_python-0.3.49+cu126-cp313-cp313-win_amd64.whl; python_version == "3.13" and platform_system == "Windows"
+# llama-cpp-python @ https://github.com/JamePeng/llama-cpp-python/releases/download/v0.3.49-cu126-win-20260831/llama_cpp_python-0.3.49+cu126-cp314-cp314-win_amd64.whl; python_version == "3.14" and platform_system == "Windows"
+
+# ---------- Windows CUDA 12.4 (备用, 取消注释启用) ----------
+# llama-cpp-python @ https://github.com/JamePeng/llama-cpp-python/releases/download/v0.3.49-cu124-win-20260831/llama_cpp_python-0.3.49+cu124-cp310-cp310-win_amd64.whl; python_version == "3.10" and platform_system == "Windows"
+# llama-cpp-python @ https://github.com/JamePeng/llama-cpp-python/releases/download/v0.3.49-cu124-win-20260831/llama_cpp_python-0.3.49+cu124-cp311-cp311-win_amd64.whl; python_version == "3.11" and platform_system == "Windows"
+# llama-cpp-python @ https://github.com/JamePeng/llama-cpp-python/releases/download/v0.3.49-cu124-win-20260831/llama_cpp_python-0.3.49+cu124-cp312-cp312-win_amd64.whl; python_version == "3.12" and platform_system == "Windows"
+# llama-cpp-python @ https://github.com/JamePeng/llama-cpp-python/releases/download/v0.3.49-cu124-win-20260831/llama_cpp_python-0.3.49+cu124-cp313-cp313-win_amd64.whl; python_version == "3.13" and platform_system == "Windows"
+# llama-cpp-python @ https://github.com/JamePeng/llama-cpp-python/releases/download/v0.3.49-cu124-win-20260831/llama_cpp_python-0.3.49+cu124-cp314-cp314-win_amd64.whl; python_version == "3.14" and platform_system == "Windows"
+
+# ---------- Linux CUDA 12.8 (默认启用; 官方未发布 cu130 Linux 轮子) ----------
+llama-cpp-python @ https://github.com/JamePeng/llama-cpp-python/releases/download/v0.3.49-cu128-linux-20260831/llama_cpp_python-0.3.49+cu128-cp310-cp310-linux_x86_64.whl; python_version == "3.10" and platform_system == "Linux"
+llama-cpp-python @ https://github.com/JamePeng/llama-cpp-python/releases/download/v0.3.49-cu128-linux-20260831/llama_cpp_python-0.3.49+cu128-cp311-cp311-linux_x86_64.whl; python_version == "3.11" and platform_system == "Linux"
+llama-cpp-python @ https://github.com/JamePeng/llama-cpp-python/releases/download/v0.3.49-cu128-linux-20260831/llama_cpp_python-0.3.49+cu128-cp312-cp312-linux_x86_64.whl; python_version == "3.12" and platform_system == "Linux"
+llama-cpp-python @ https://github.com/JamePeng/llama-cpp-python/releases/download/v0.3.49-cu128-linux-20260831/llama_cpp_python-0.3.49+cu128-cp313-cp313-linux_x86_64.whl; python_version == "3.13" and platform_system == "Linux"
+llama-cpp-python @ https://github.com/JamePeng/llama-cpp-python/releases/download/v0.3.49-cu128-linux-20260831/llama_cpp_python-0.3.49+cu128-cp314-cp314-linux_x86_64.whl; python_version == "3.14" and platform_system == "Linux"
+
+# ---------- Linux CUDA 12.6 (备用, 取消注释启用) ----------
+# llama-cpp-python @ https://github.com/JamePeng/llama-cpp-python/releases/download/v0.3.49-cu126-linux-20260831/llama_cpp_python-0.3.49+cu126-cp310-cp310-linux_x86_64.whl; python_version == "3.10" and platform_system == "Linux"
+# llama-cpp-python @ https://github.com/JamePeng/llama-cpp-python/releases/download/v0.3.49-cu126-linux-20260831/llama_cpp_python-0.3.49+cu126-cp311-cp311-linux_x86_64.whl; python_version == "3.11" and platform_system == "Linux"
+# llama-cpp-python @ https://github.com/JamePeng/llama-cpp-python/releases/download/v0.3.49-cu126-linux-20260831/llama_cpp_python-0.3.49+cu126-cp312-cp312-linux_x86_64.whl; python_version == "3.12" and platform_system == "Linux"
+# llama-cpp-python @ https://github.com/JamePeng/llama-cpp-python/releases/download/v0.3.49-cu126-linux-20260831/llama_cpp_python-0.3.49+cu126-cp313-cp313-linux_x86_64.whl; python_version == "3.13" and platform_system == "Linux"
+# llama-cpp-python @ https://github.com/JamePeng/llama-cpp-python/releases/download/v0.3.49-cu126-linux-20260831/llama_cpp_python-0.3.49+cu126-cp314-cp314-linux_x86_64.whl; python_version == "3.14" and platform_system == "Linux"
+
+# ---------- Linux CUDA 12.4 (备用, 取消注释启用) ----------
+# llama-cpp-python @ https://github.com/JamePeng/llama-cpp-python/releases/download/v0.3.49-cu124-linux-20260831/llama_cpp_python-0.3.49+cu124-cp310-cp310-linux_x86_64.whl; python_version == "3.10" and platform_system == "Linux"
+# llama-cpp-python @ https://github.com/JamePeng/llama-cpp-python/releases/download/v0.3.49-cu124-linux-20260831/llama_cpp_python-0.3.49+cu124-cp311-cp311-linux_x86_64.whl; python_version == "3.11" and platform_system == "Linux"
+# llama-cpp-python @ https://github.com/JamePeng/llama-cpp-python/releases/download/v0.3.49-cu124-linux-20260831/llama_cpp_python-0.3.49+cu124-cp312-cp312-linux_x86_64.whl; python_version == "3.12" and platform_system == "Linux"
+# llama-cpp-python @ https://github.com/JamePeng/llama-cpp-python/releases/download/v0.3.49-cu124-linux-20260831/llama_cpp_python-0.3.49+cu124-cp313-cp313-linux_x86_64.whl; python_version == "3.13" and platform_system == "Linux"
+# llama-cpp-python @ https://github.com/JamePeng/llama-cpp-python/releases/download/v0.3.49-cu124-linux-20260831/llama_cpp_python-0.3.49+cu124-cp314-cp314-linux_x86_64.whl; python_version == "3.14" and platform_system == "Linux"
+
+# ---------- macOS Metal (默认启用) ----------
+llama-cpp-python @ https://github.com/JamePeng/llama-cpp-python/releases/download/v0.3.49-Metal-macos-20260831/llama_cpp_python-0.3.49-cp310-cp310-macosx_11_0_arm64.whl; python_version == "3.10" and platform_system == "Darwin"
+llama-cpp-python @ https://github.com/JamePeng/llama-cpp-python/releases/download/v0.3.49-Metal-macos-20260831/llama_cpp_python-0.3.49-cp311-cp311-macosx_11_0_arm64.whl; python_version == "3.11" and platform_system == "Darwin"
+llama-cpp-python @ https://github.com/JamePeng/llama-cpp-python/releases/download/v0.3.49-Metal-macos-20260831/llama_cpp_python-0.3.49-cp312-cp312-macosx_11_0_arm64.whl; python_version == "3.12" and platform_system == "Darwin"
+llama-cpp-python @ https://github.com/JamePeng/llama-cpp-python/releases/download/v0.3.49-Metal-macos-20260831/llama_cpp_python-0.3.49-cp313-cp313-macosx_11_0_arm64.whl; python_version == "3.13" and platform_system == "Darwin"
+llama-cpp-python @ https://github.com/JamePeng/llama-cpp-python/releases/download/v0.3.49-Metal-macos-20260831/llama_cpp_python-0.3.49-cp314-cp314-macosx_11_0_arm64.whl; python_version == "3.14" and platform_system == "Darwin"
