@@ -5,3 +5,4 @@ checkpoints/
 *.egg-info
 .pytest_cache
 .DS_Store
+.workbuddy/

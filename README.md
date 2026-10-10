@@ -37,6 +37,7 @@ python -m pip install -r ComfyUI-llama-cpp/requirements.txt
 |------|-------------|
 | `Llama-cpp Model Loader` | Load GGUF models with optional mmproj for vision |
 | `Llama-cpp Instruct` | Main inference node with multi-image, video, and conversation support |
+| `Llama-cpp Prompt Optimizer` | Standalone MiniMax-H3 / Qwen-Image-2.1 prompt optimization (EN/ZH/bilingual output) |
 | `Llama-cpp Parameters` | Configure generation parameters (temperature, top-p, etc.) |
 | `Llama-cpp Image Recognition` | Recognize images with preset modes (Describe, Tags, OCR, etc.) |
 | `Llama-cpp Dynamic Image Switch` | Auto-detect images and switch between text/vision modes |
