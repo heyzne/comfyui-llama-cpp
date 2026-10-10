@@ -12,6 +12,18 @@ from scipy.ndimage import gaussian_filter
 from .support.cqdm import cqdm
 from .support.gguf_layers import get_layer_count
 from .support.prompt_enhancer_preset import *
+from .support.prompt_optimizer_prompts import (
+    PROMPT_OPTIMIZER_MODES,
+    H3_OUTPUT_FORMATS,
+    build_h3_system_prompt,
+    build_qwen_image_system_prompt,
+    build_h3_user_message,
+    build_qwen_image_user_message,
+    build_messages,
+    split_bilingual_output,
+    normalize_h3_mode,
+    PROMPT_TRANSLATE_TO_CHINESE_SYSTEM,
+)
 
 import folder_paths
 import comfy.model_management as mm
@@ -1484,6 +1496,202 @@ class llama_cpp_image_input_switch:
         return (out_text, actual_mode, use_vision, passthrough)
 
 
+class llama_cpp_prompt_optimizer:
+    """提示词优化节点 - MiniMax-H3 / Qwen-Image-2.1 专用提示词优化，支持中英文输出。
+
+    参考 ComfyUI-xiaozhuguang (MIT License, Copyright (c) 2025 xiaozhuguang) 的
+    H3 / Qwen-Image-2.1 提示词优化实现移植而来，适配本插件的原生 llama.cpp 推理架构。
+    """
+
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "llama_model": ("LLAMACPPMODEL",),
+                "generation_mode": (PROMPT_OPTIMIZER_MODES, {
+                    "default": PROMPT_OPTIMIZER_MODES[0],
+                    "tooltip": "H3 视频模式: T2VA/I2VA/FL2VA/L2VA/Ref2VA\nQwen-Image-2.1 图像模式: 文生图/图像编辑/多参考图"
+                }),
+                "user_prompt": ("STRING", {
+                    "default": "",
+                    "multiline": True,
+                    "tooltip": "提示词和参考图片均可留空 / Prompt and reference images are optional"
+                }),
+                "output_language": (["仅英文", "仅中文", "中英双语"], {
+                    "default": "仅英文",
+                    "tooltip": "选择输出语言。仅输出一种语言可减少生成 token 和耗时 / Choose output language; a single language reduces generation tokens and time"
+                }),
+                "no_bgm": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "仅 H3：无背景音乐（non_diegetic_music = N/A）/ H3 only: no background music"
+                }),
+                "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff, "step": 1}),
+                "force_offload": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "推理后卸载模型释放显存 / Unload the model after inference."
+                }),
+            },
+            "optional": {
+                "extra_requirements": ("STRING", {
+                    "default": "",
+                    "multiline": True,
+                    "tooltip": "附加要求 / 风格提示，会以 [Extra Requirements] 附加到请求 / Extra style or requirement hints"
+                }),
+                "parameters": ("LLAMACPPARAMS",),
+                "images": ("IMAGE", {"tooltip": "参考图批量输入（旧版兼容槽）/ Reference image batch (legacy slot)."}),
+                "image_1": ("IMAGE", {"tooltip": "参考图片 1 / Reference image 1. Connect more to auto-add slots."}),
+                "image_2": ("IMAGE", {"tooltip": "参考图片 2 / Reference image 2"}),
+                "image_3": ("IMAGE", {"tooltip": "参考图片 3 / Reference image 3"}),
+                "image_4": ("IMAGE", {"tooltip": "参考图片 4 / Reference image 4"}),
+                "image_5": ("IMAGE", {"tooltip": "参考图片 5 / Reference image 5"}),
+                "image_6": ("IMAGE", {"tooltip": "参考图片 6 / Reference image 6"}),
+                "image_7": ("IMAGE", {"tooltip": "参考图片 7 / Reference image 7"}),
+                "image_8": ("IMAGE", {"tooltip": "参考图片 8 / Reference image 8"}),
+                "image_9": ("IMAGE", {"tooltip": "参考图片 9 / Reference image 9"}),
+                "image_10": ("IMAGE", {"tooltip": "参考图片 10 / Reference image 10"}),
+            },
+        }
+
+    RETURN_TYPES = ("STRING", "STRING")
+    RETURN_NAMES = ("english_prompt", "chinese_prompt")
+    FUNCTION = "process"
+    CATEGORY = "llama-cpp-vlm"
+
+    @staticmethod
+    def _image_to_data_uris(images):
+        """将 ComfyUI IMAGE 张量（单张或批量）转为 base64 JPEG data URI 列表，最长边限制 1024。"""
+        uris = []
+        tensor = images
+        if tensor.ndim == 3:
+            tensor = tensor.unsqueeze(0)
+        for i in range(tensor.shape[0]):
+            img_np = (tensor[i].cpu().numpy() * 255.0).clip(0, 255).astype("uint8").squeeze()
+            pil_img = Image.fromarray(img_np)
+            max_side = 1024
+            if max(pil_img.size) > max_side:
+                ratio = max_side / max(pil_img.size)
+                pil_img = pil_img.resize(
+                    (int(pil_img.size[0] * ratio), int(pil_img.size[1] * ratio)),
+                    Image.LANCZOS,
+                )
+            buf = io.BytesIO()
+            pil_img.save(buf, format="JPEG", quality=85)
+            uris.append(f"data:image/jpeg;base64,{base64.b64encode(buf.getvalue()).decode('utf-8')}")
+        return uris
+
+    def process(self, llama_model, generation_mode, user_prompt, output_language,
+                no_bgm, seed, force_offload, parameters=None, images=None,
+                image_1=None, image_2=None, image_3=None, image_4=None, image_5=None,
+                image_6=None, image_7=None, image_8=None, image_9=None, image_10=None,
+                extra_requirements="", **kwargs):
+        # 收集所有图像输入
+        all_images = []
+        if images is not None:
+            for b in range(images.shape[0]):
+                all_images.append(images[b:b + 1])
+        for img in [image_1, image_2, image_3, image_4, image_5,
+                    image_6, image_7, image_8, image_9, image_10]:
+            if img is not None:
+                for b in range(img.shape[0]):
+                    all_images.append(img[b:b + 1])
+
+        if not LLAMA_CPP_STORAGE.llm:
+            LLAMA_CPP_STORAGE.load_model(llama_model)
+
+        image_uris = []
+        if all_images:
+            if not _chat_handler_has_vision(LLAMA_CPP_STORAGE.chat_handler):
+                raise ValueError("Image input detected, but the loaded model is not configured with a mmproj module.")
+            for img in all_images:
+                image_uris.extend(self._image_to_data_uris(img))
+
+        if parameters is None:
+            parameters = {
+                "max_tokens": 4096,
+                "top_k": 30,
+                "top_p": 0.9,
+                "min_p": 0.05,
+                "typical_p": 1.0,
+                "temperature": 0.7,
+                "repeat_penalty": 1.0,
+                "frequency_penalty": 0.0,
+                "presence_penalty": 1.0,
+                "mirostat_mode": 0,
+                "mirostat_eta": 0.1,
+                "mirostat_tau": 5.0
+            }
+        if _MTMD:
+            parameters.pop("presence_penalty", None)
+        _parameters = parameters.copy()
+        _parameters.pop("state_uid", None)
+
+        is_h3 = generation_mode.startswith("H3")
+        if output_language not in H3_OUTPUT_FORMATS:
+            output_language = "仅英文"
+
+        # ── 构造 system prompt 与 user message ──
+        # 双语采用两次推理：先英文优化，再将英文精确翻译为中文，避免模型省略中文段。
+        secondary_system_prompt = None
+        if is_h3:
+            core_mode = normalize_h3_mode(generation_mode)
+            if output_language == "中英双语":
+                system_prompt = build_h3_system_prompt("仅英文")
+                secondary_system_prompt = PROMPT_TRANSLATE_TO_CHINESE_SYSTEM
+            else:
+                system_prompt = build_h3_system_prompt(output_language)
+            user_message = build_h3_user_message(
+                user_prompt, core_mode, image_count=len(image_uris),
+                no_bgm=no_bgm, extra_requirements=extra_requirements,
+            )
+            label = "<Picture {n}>"
+            print(f"[llama-cpp_vlm] Prompt Optimizer: MiniMax-H3, mode={core_mode}, language={output_language}")
+        else:
+            if output_language == "中英双语":
+                system_prompt = build_qwen_image_system_prompt(generation_mode, "仅英文")
+                secondary_system_prompt = PROMPT_TRANSLATE_TO_CHINESE_SYSTEM
+            else:
+                system_prompt = build_qwen_image_system_prompt(generation_mode, output_language)
+            user_message = build_qwen_image_user_message(
+                user_prompt, generation_mode, image_count=len(image_uris),
+                extra_requirements=extra_requirements,
+            )
+            label = "<image{n}>"
+            print(f"[llama-cpp_vlm] Prompt Optimizer: Qwen-Image-2.1, mode={generation_mode}, language={output_language}")
+
+        if image_uris:
+            print(f"[llama-cpp_vlm] Prompt Optimizer: {len(image_uris)} reference image(s)")
+
+        messages = build_messages(system_prompt, user_message, image_uris, label)
+
+        print(f"[llama-cpp_vlm] Prompt Optimizer: inference start...")
+        output = LLAMA_CPP_STORAGE.llm.create_chat_completion(messages=messages, seed=seed, **_parameters)
+        text = output['choices'][0]['message']['content'].removeprefix(": ").strip()
+
+        chinese_text = ""
+        if secondary_system_prompt is not None:
+            print("[llama-cpp_vlm] Prompt Optimizer: translating Chinese version...")
+            chinese_messages = build_messages(
+                secondary_system_prompt,
+                "[English prompt to translate]\n" + text,
+            )
+            chinese_out = LLAMA_CPP_STORAGE.llm.create_chat_completion(
+                messages=chinese_messages, seed=seed, **_parameters
+            )
+            chinese_text = chinese_out['choices'][0]['message']['content'].removeprefix(": ").strip()
+
+        if force_offload:
+            LLAMA_CPP_STORAGE.clean()
+
+        gc.collect()
+        mm.soft_empty_cache()
+
+        if output_language == "仅英文":
+            return (text, "")
+        if output_language == "仅中文":
+            return ("", text)
+        return (text, chinese_text)
+
+
 NODE_CLASS_MAPPINGS = {
     "llama_cpp_model_loader": llama_cpp_model_loader,
     "llama_cpp_instruct_adv": llama_cpp_instruct_adv,
@@ -1492,6 +1700,7 @@ NODE_CLASS_MAPPINGS = {
     "llama_cpp_clean_states": llama_cpp_clean_states,
     "llama_cpp_image_recognition": llama_cpp_image_recognition,
     "llama_cpp_image_input_switch": llama_cpp_image_input_switch,
+    "llama_cpp_prompt_optimizer": llama_cpp_prompt_optimizer,
     "parse_json_node": parse_json_node,
     "json_to_bbox": json_to_bbox,
     "bbox_to_segs": bbox_to_segs,
