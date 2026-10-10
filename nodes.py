@@ -20,7 +20,6 @@ from .support.prompt_optimizer_prompts import (
     build_h3_user_message,
     build_qwen_image_user_message,
     build_messages,
-    split_bilingual_output,
     normalize_h3_mode,
     PROMPT_TRANSLATE_TO_CHINESE_SYSTEM,
 )
@@ -343,6 +342,27 @@ def image2base64(image):
     img_base64 = base64.b64encode(buffered.getvalue()).decode('utf-8')
     return img_base64
 
+def _image_to_data_uris(images):
+    """将 ComfyUI IMAGE 张量（单张或批量）转为 base64 JPEG data URI 列表，最长边限制 1024。"""
+    uris = []
+    tensor = images
+    if tensor.ndim == 3:
+        tensor = tensor.unsqueeze(0)
+    for i in range(tensor.shape[0]):
+        img_np = (tensor[i].cpu().numpy() * 255.0).clip(0, 255).astype("uint8").squeeze()
+        pil_img = Image.fromarray(img_np)
+        max_side = 1024
+        if max(pil_img.size) > max_side:
+            ratio = max_side / max(pil_img.size)
+            pil_img = pil_img.resize(
+                (int(pil_img.size[0] * ratio), int(pil_img.size[1] * ratio)),
+                Image.LANCZOS,
+            )
+        buf = io.BytesIO()
+        pil_img.save(buf, format="JPEG", quality=85)
+        uris.append(f"data:image/jpeg;base64,{base64.b64encode(buf.getvalue()).decode('utf-8')}")
+    return uris
+
 def parse_json(json_str):
     json_output = json_str.strip().removeprefix("```json").removesuffix("```")
     try:
@@ -645,7 +665,7 @@ class llama_cpp_instruct_adv:
                     if not _chat_handler_has_vision(LLAMA_CPP_STORAGE.chat_handler):
                         raise ValueError("Image input detected, but the loaded model is not configured with a mmproj module.")
                     for img in images:
-                        opt_uris.extend(llama_cpp_prompt_optimizer._image_to_data_uris(img))
+                        opt_uris.extend(_image_to_data_uris(img))
 
                 if generation_mode.startswith("H3"):
                     core_mode = normalize_h3_mode(generation_mode)
@@ -816,29 +836,6 @@ class llama_cpp_parameters:
     def process(self, **kwargs):
         return (kwargs,)
     
-class llama_cpp_clean_states:
-    @classmethod
-    def INPUT_TYPES(s):
-        return {
-            "required": {
-                "any": (any_type,),
-                "state_uid": ("INT", {
-                    "default": -1, "min": -1, "max": 999999, "step": 1,
-                    "tooltip": "Clear the saved state for a specific ID (-1 = clear all)"
-                }),
-            },
-        }
-    
-    RETURN_TYPES = (any_type,)
-    RETURN_NAMES = ("any",)
-    FUNCTION = "process"
-    CATEGORY = "llama-cpp-vlm"
-    
-    def process(self, any, state_uid):
-        print(f"[llama-cpp_vlm] Cleaning up saved states {state_uid}...")
-        LLAMA_CPP_STORAGE.clean_state(state_uid)
-        return (any,)
-
 class llama_cpp_unload_model:
     @classmethod
     def INPUT_TYPES(s):
@@ -1293,491 +1290,12 @@ class PromptEnhancerPreset:
             case _:
                 raise ValueError(f'Unknow preset: "{preset}"')
 
-# ============ 动态图片输入识别节点 ============
-
-# 识别模式预设
-recognition_modes = {
-    "Describe": "Describe this image in detail, including the main subject, setting, colors, lighting, and composition.",
-    "Tags": "Generate a comma-separated list of descriptive tags for this image. Focus on visual elements only.",
-    "Objects": "List all the objects and elements you can identify in this image. Be thorough and specific.",
-    "Scene": "Describe the scene and environment in this image. What kind of place is this? What is the atmosphere?",
-    "Colors & Lighting": "Analyze the color palette, lighting conditions, and visual mood of this image.",
-    "Text/OCR": "If there is any text in this image, extract and transcribe it. Describe the font style and placement.",
-    "People": "Describe any people in this image: their appearance, clothing, pose, expression, and what they are doing.",
-    "Style Analysis": "Analyze the artistic style of this image. Is it photorealistic, illustrated, painted, 3D rendered, etc.?",
-    "Composition": "Describe the composition and framing of this image: the rule of thirds, leading lines, depth of field, etc.",
-    "Custom": "",
-}
-
-recognition_mode_tags = list(recognition_modes.keys())
-
-
-class llama_cpp_image_recognition:
-    """动态图片输入识别节点 - 支持多种识别模式，自动检测图片输入"""
-
-    @classmethod
-    def INPUT_TYPES(s):
-        return {
-            "required": {
-                "llama_model": ("LLAMACPPMODEL",),
-                "mode": (recognition_mode_tags, {
-                    "default": "Describe",
-                    "tooltip": "Recognition mode - dynamically switches behavior based on selection"
-                }),
-                "custom_prompt": ("STRING", {
-                    "default": "",
-                    "multiline": True,
-                    "placeholder": 'Custom prompt for "Custom" mode. Use @ as placeholder for the word "image".'
-                }),
-                "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff, "step": 1}),
-                "concat_results": ("BOOLEAN", {
-                    "default": True,
-                    "tooltip": "Combine all image results into a single text output."
-                }),
-            },
-            "optional": {
-                "images": ("IMAGE", {
-                    "tooltip": "Input images for recognition. Supports batch processing (multiple images)."
-                }),
-                "parameters": ("LLAMACPPARAMS",),
-            },
-        }
-
-    RETURN_TYPES = ("STRING", "STRING", "INT", "IMAGE")
-    RETURN_NAMES = ("result", "result_list", "image_count", "passthrough_images")
-    OUTPUT_IS_LIST = (False, True, False, True)
-    FUNCTION = "recognize"
-    CATEGORY = "llama-cpp-vlm"
-
-    def recognize(self, llama_model, mode, custom_prompt, seed, concat_results,
-                  images=None, parameters=None):
-        if not LLAMA_CPP_STORAGE.llm:
-            LLAMA_CPP_STORAGE.load_model(llama_model)
-
-        if images is None or (hasattr(images, 'shape') and images.shape[0] == 0):
-            return ("⚠ No images connected. Please connect an image input.", [], 0, [])
-
-        if not _chat_handler_has_vision(LLAMA_CPP_STORAGE.chat_handler):
-            raise ValueError("Image input detected, but the loaded model is not configured with a mmproj module.")
-
-        if parameters is None:
-            parameters = {
-                "max_tokens": 1024,
-                "top_k": 30,
-                "top_p": 0.9,
-                "min_p": 0.05,
-                "typical_p": 1.0,
-                "temperature": 0.8,
-                "repeat_penalty": 1.0,
-                "frequency_penalty": 0.0,
-                "presence_penalty": 1.0,
-                "mirostat_mode": 0,
-                "mirostat_eta": 0.1,
-                "mirostat_tau": 5.0
-            }
-        if _MTMD:
-            parameters.pop("presence_penalty", None)
-
-        _parameters = parameters.copy()
-        _parameters.pop("state_uid", None)
-
-        # 获取识别提示词
-        if mode == "Custom" and custom_prompt.strip():
-            prompt_text = custom_prompt.strip().replace("@", "image")
-        elif mode in recognition_modes:
-            prompt_text = recognition_modes[mode]
-        else:
-            prompt_text = recognition_modes["Describe"]
-
-        num_images = images.shape[0]
-        print(f"[llama-cpp_vlm] Image Recognition: mode={mode}, images={num_images}")
-
-        results_list = []
-
-        for i in range(num_images):
-            if mm.processing_interrupted():
-                raise mm.InterruptProcessingException()
-
-            # 转 base64
-            img_np = np.clip(255.0 * images[i].cpu().numpy().squeeze(), 0, 255).astype(np.uint8)
-            img_base64 = image2base64(img_np)
-
-            messages = [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": prompt_text},
-                        {
-                            "type": "image_url",
-                            "image_url": {"url": f"data:image/jpeg;base64,{img_base64}"}
-                        }
-                    ]
-                }
-            ]
-
-            print(f"[llama-cpp_vlm] Processing image {i+1}/{num_images}...")
-            output = LLAMA_CPP_STORAGE.llm.create_chat_completion(
-                messages=messages, seed=seed, **_parameters
-            )
-            text = output['choices'][0]['message']['content'].removeprefix(": ").lstrip()
-            results_list.append(text)
-
-        # 合并结果
-        if concat_results and len(results_list) > 1:
-            combined = "\n\n".join(
-                [f"====== Image {j+1} ======\n{r}" for j, r in enumerate(results_list)]
-            )
-        elif len(results_list) == 1:
-            combined = results_list[0]
-        else:
-            combined = "\n\n".join(results_list)
-
-        # passthrough 原始图片
-        passthrough = [images[i:i+1] for i in range(num_images)]
-
-        gc.collect()
-        mm.soft_empty_cache()
-
-        return (combined, results_list, num_images, passthrough)
-
-
-class llama_cpp_image_input_switch:
-    """动态图片输入开关节点 - 根据图片是否连接来动态切换处理流程"""
-
-    @classmethod
-    def INPUT_TYPES(s):
-        return {
-            "required": {
-                "llama_model": ("LLAMACPPMODEL",),
-                "text_prompt": ("STRING", {
-                    "multiline": True,
-                    "default": "",
-                    "placeholder": "Text prompt (used when no image is connected, or as complement to image)"
-                }),
-                "mode": (["Auto Detect", "Force Text", "Force Vision"], {
-                    "default": "Auto Detect",
-                    "tooltip": "Auto Detect: uses VLM if image connected, otherwise text-only.\nForce Text: always text-only LLM.\nForce Vision: requires image input."
-                }),
-                "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff, "step": 1}),
-            },
-            "optional": {
-                "images": ("IMAGE", {
-                    "tooltip": "Dynamic image input. Connect to enable vision mode."
-                }),
-                "parameters": ("LLAMACPPARAMS",),
-            },
-        }
-
-    RETURN_TYPES = ("STRING", "STRING", "BOOLEAN", "IMAGE")
-    RETURN_NAMES = ("output", "mode_used", "is_vision", "passthrough_images")
-    FUNCTION = "process"
-    CATEGORY = "llama-cpp-vlm"
-
-    def process(self, llama_model, text_prompt, mode, seed,
-                images=None, parameters=None):
-        if not LLAMA_CPP_STORAGE.llm:
-            LLAMA_CPP_STORAGE.load_model(llama_model)
-
-        if parameters is None:
-            parameters = {
-                "max_tokens": 1024,
-                "top_k": 30,
-                "top_p": 0.9,
-                "min_p": 0.05,
-                "typical_p": 1.0,
-                "temperature": 0.8,
-                "repeat_penalty": 1.0,
-                "frequency_penalty": 0.0,
-                "presence_penalty": 1.0,
-                "mirostat_mode": 0,
-                "mirostat_eta": 0.1,
-                "mirostat_tau": 5.0
-            }
-        if _MTMD:
-            parameters.pop("presence_penalty", None)
-
-        _parameters = parameters.copy()
-        _parameters.pop("state_uid", None)
-
-        has_images = images is not None and images.shape[0] > 0
-        has_vision = _chat_handler_has_vision(LLAMA_CPP_STORAGE.chat_handler)
-
-        # 动态决定使用何种模式
-        actual_mode = mode
-        use_vision = False
-
-        if mode == "Auto Detect":
-            if has_images and has_vision:
-                actual_mode = "Vision"
-                use_vision = True
-            else:
-                actual_mode = "Text"
-        elif mode == "Force Vision":
-            if not has_images:
-                return ("⚠ Force Vision mode requires connected images!", "Error", False, [])
-            if not has_vision:
-                return ("⚠ Model has no mmproj. Cannot use vision mode!", "Error", False, [])
-            use_vision = True
-        elif mode == "Force Text":
-            use_vision = False
-
-        if use_vision and has_images:
-            # VLM 模式：用图片+文本
-            results = []
-            num_images = images.shape[0]
-
-            for i in range(num_images):
-                if mm.processing_interrupted():
-                    raise mm.InterruptProcessingException()
-
-                img_np = np.clip(255.0 * images[i].cpu().numpy().squeeze(), 0, 255).astype(np.uint8)
-                img_base64 = image2base64(img_np)
-
-                content = []
-                if text_prompt.strip():
-                    content.append({"type": "text", "text": text_prompt.strip()})
-                else:
-                    content.append({"type": "text", "text": "Describe this image."})
-                content.append({
-                    "type": "image_url",
-                    "image_url": {"url": f"data:image/jpeg;base64,{img_base64}"}
-                })
-
-                messages = [{"role": "user", "content": content}]
-
-                print(f"[llama-cpp_vlm] Dynamic switch - Vision mode, image {i+1}/{num_images}")
-                output = LLAMA_CPP_STORAGE.llm.create_chat_completion(
-                    messages=messages, seed=seed, **_parameters
-                )
-                results.append(output['choices'][0]['message']['content'].removeprefix(": ").lstrip())
-
-            out_text = "\n\n".join(results) if len(results) > 1 else results[0]
-        else:
-            # 纯文本 LLM 模式
-            prompt = text_prompt.strip() if text_prompt.strip() else "Hello, how are you?"
-            messages = [{"role": "user", "content": prompt}]
-
-            print(f"[llama-cpp_vlm] Dynamic switch - Text-only mode")
-            output = LLAMA_CPP_STORAGE.llm.create_chat_completion(
-                messages=messages, seed=seed, **_parameters
-            )
-            out_text = output['choices'][0]['message']['content'].removeprefix(": ").lstrip()
-
-        passthrough = []
-        if images is not None:
-            passthrough = [images[i:i+1] for i in range(images.shape[0])]
-
-        gc.collect()
-        mm.soft_empty_cache()
-
-        return (out_text, actual_mode, use_vision, passthrough)
-
-
-class llama_cpp_prompt_optimizer:
-    """提示词优化节点 - MiniMax-H3 / Qwen-Image-2.1 专用提示词优化，支持中英文输出。
-
-    参考 ComfyUI-xiaozhuguang (MIT License, Copyright (c) 2025 xiaozhuguang) 的
-    H3 / Qwen-Image-2.1 提示词优化实现移植而来，适配本插件的原生 llama.cpp 推理架构。
-    """
-
-    @classmethod
-    def INPUT_TYPES(s):
-        return {
-            "required": {
-                "llama_model": ("LLAMACPPMODEL",),
-                "generation_mode": (PROMPT_OPTIMIZER_MODES, {
-                    "default": PROMPT_OPTIMIZER_MODES[0],
-                    "tooltip": "H3 视频模式: T2VA/I2VA/FL2VA/L2VA/Ref2VA\nQwen-Image-2.1 图像模式: 文生图/图像编辑/多参考图"
-                }),
-                "user_prompt": ("STRING", {
-                    "default": "",
-                    "multiline": True,
-                    "tooltip": "提示词和参考图片均可留空 / Prompt and reference images are optional"
-                }),
-                "output_language": (["仅英文", "仅中文", "中英双语"], {
-                    "default": "仅英文",
-                    "tooltip": "选择输出语言。仅输出一种语言可减少生成 token 和耗时 / Choose output language; a single language reduces generation tokens and time"
-                }),
-                "no_bgm": ("BOOLEAN", {
-                    "default": False,
-                    "tooltip": "仅 H3：无背景音乐（non_diegetic_music = N/A）/ H3 only: no background music"
-                }),
-                "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff, "step": 1}),
-                "force_offload": ("BOOLEAN", {
-                    "default": False,
-                    "tooltip": "推理后卸载模型释放显存 / Unload the model after inference."
-                }),
-            },
-            "optional": {
-                "extra_requirements": ("STRING", {
-                    "default": "",
-                    "multiline": True,
-                    "tooltip": "附加要求 / 风格提示，会以 [Extra Requirements] 附加到请求 / Extra style or requirement hints"
-                }),
-                "parameters": ("LLAMACPPARAMS",),
-                "images": ("IMAGE", {"tooltip": "参考图批量输入（旧版兼容槽）/ Reference image batch (legacy slot)."}),
-                "image_1": ("IMAGE", {"tooltip": "参考图片 1 / Reference image 1. Connect more to auto-add slots."}),
-                "image_2": ("IMAGE", {"tooltip": "参考图片 2 / Reference image 2"}),
-                "image_3": ("IMAGE", {"tooltip": "参考图片 3 / Reference image 3"}),
-                "image_4": ("IMAGE", {"tooltip": "参考图片 4 / Reference image 4"}),
-                "image_5": ("IMAGE", {"tooltip": "参考图片 5 / Reference image 5"}),
-                "image_6": ("IMAGE", {"tooltip": "参考图片 6 / Reference image 6"}),
-                "image_7": ("IMAGE", {"tooltip": "参考图片 7 / Reference image 7"}),
-                "image_8": ("IMAGE", {"tooltip": "参考图片 8 / Reference image 8"}),
-                "image_9": ("IMAGE", {"tooltip": "参考图片 9 / Reference image 9"}),
-                "image_10": ("IMAGE", {"tooltip": "参考图片 10 / Reference image 10"}),
-            },
-        }
-
-    RETURN_TYPES = ("STRING", "STRING")
-    RETURN_NAMES = ("english_prompt", "chinese_prompt")
-    FUNCTION = "process"
-    CATEGORY = "llama-cpp-vlm"
-
-    @staticmethod
-    def _image_to_data_uris(images):
-        """将 ComfyUI IMAGE 张量（单张或批量）转为 base64 JPEG data URI 列表，最长边限制 1024。"""
-        uris = []
-        tensor = images
-        if tensor.ndim == 3:
-            tensor = tensor.unsqueeze(0)
-        for i in range(tensor.shape[0]):
-            img_np = (tensor[i].cpu().numpy() * 255.0).clip(0, 255).astype("uint8").squeeze()
-            pil_img = Image.fromarray(img_np)
-            max_side = 1024
-            if max(pil_img.size) > max_side:
-                ratio = max_side / max(pil_img.size)
-                pil_img = pil_img.resize(
-                    (int(pil_img.size[0] * ratio), int(pil_img.size[1] * ratio)),
-                    Image.LANCZOS,
-                )
-            buf = io.BytesIO()
-            pil_img.save(buf, format="JPEG", quality=85)
-            uris.append(f"data:image/jpeg;base64,{base64.b64encode(buf.getvalue()).decode('utf-8')}")
-        return uris
-
-    def process(self, llama_model, generation_mode, user_prompt, output_language,
-                no_bgm, seed, force_offload, parameters=None, images=None,
-                image_1=None, image_2=None, image_3=None, image_4=None, image_5=None,
-                image_6=None, image_7=None, image_8=None, image_9=None, image_10=None,
-                extra_requirements="", **kwargs):
-        # 收集所有图像输入
-        all_images = []
-        if images is not None:
-            for b in range(images.shape[0]):
-                all_images.append(images[b:b + 1])
-        for img in [image_1, image_2, image_3, image_4, image_5,
-                    image_6, image_7, image_8, image_9, image_10]:
-            if img is not None:
-                for b in range(img.shape[0]):
-                    all_images.append(img[b:b + 1])
-
-        if not LLAMA_CPP_STORAGE.llm:
-            LLAMA_CPP_STORAGE.load_model(llama_model)
-
-        image_uris = []
-        if all_images:
-            if not _chat_handler_has_vision(LLAMA_CPP_STORAGE.chat_handler):
-                raise ValueError("Image input detected, but the loaded model is not configured with a mmproj module.")
-            for img in all_images:
-                image_uris.extend(self._image_to_data_uris(img))
-
-        if parameters is None:
-            parameters = {
-                "max_tokens": 4096,
-                "top_k": 30,
-                "top_p": 0.9,
-                "min_p": 0.05,
-                "typical_p": 1.0,
-                "temperature": 0.7,
-                "repeat_penalty": 1.0,
-                "frequency_penalty": 0.0,
-                "presence_penalty": 1.0,
-                "mirostat_mode": 0,
-                "mirostat_eta": 0.1,
-                "mirostat_tau": 5.0
-            }
-        if _MTMD:
-            parameters.pop("presence_penalty", None)
-        _parameters = parameters.copy()
-        _parameters.pop("state_uid", None)
-
-        is_h3 = generation_mode.startswith("H3")
-        if output_language not in H3_OUTPUT_FORMATS:
-            output_language = "仅英文"
-
-        # ── 构造 system prompt 与 user message ──
-        # 双语采用两次推理：先英文优化，再将英文精确翻译为中文，避免模型省略中文段。
-        secondary_system_prompt = None
-        if is_h3:
-            core_mode = normalize_h3_mode(generation_mode)
-            if output_language == "中英双语":
-                system_prompt = build_h3_system_prompt("仅英文")
-                secondary_system_prompt = PROMPT_TRANSLATE_TO_CHINESE_SYSTEM
-            else:
-                system_prompt = build_h3_system_prompt(output_language)
-            user_message = build_h3_user_message(
-                user_prompt, core_mode, image_count=len(image_uris),
-                no_bgm=no_bgm, extra_requirements=extra_requirements,
-            )
-            label = "<Picture {n}>"
-            print(f"[llama-cpp_vlm] Prompt Optimizer: MiniMax-H3, mode={core_mode}, language={output_language}")
-        else:
-            if output_language == "中英双语":
-                system_prompt = build_qwen_image_system_prompt(generation_mode, "仅英文")
-                secondary_system_prompt = PROMPT_TRANSLATE_TO_CHINESE_SYSTEM
-            else:
-                system_prompt = build_qwen_image_system_prompt(generation_mode, output_language)
-            user_message = build_qwen_image_user_message(
-                user_prompt, generation_mode, image_count=len(image_uris),
-                extra_requirements=extra_requirements,
-            )
-            label = "<image{n}>"
-            print(f"[llama-cpp_vlm] Prompt Optimizer: Qwen-Image-2.1, mode={generation_mode}, language={output_language}")
-
-        if image_uris:
-            print(f"[llama-cpp_vlm] Prompt Optimizer: {len(image_uris)} reference image(s)")
-
-        messages = build_messages(system_prompt, user_message, image_uris, label)
-
-        print(f"[llama-cpp_vlm] Prompt Optimizer: inference start...")
-        output = LLAMA_CPP_STORAGE.llm.create_chat_completion(messages=messages, seed=seed, **_parameters)
-        text = output['choices'][0]['message']['content'].removeprefix(": ").strip()
-
-        chinese_text = ""
-        if secondary_system_prompt is not None:
-            print("[llama-cpp_vlm] Prompt Optimizer: translating Chinese version...")
-            chinese_messages = build_messages(
-                secondary_system_prompt,
-                "[English prompt to translate]\n" + text,
-            )
-            chinese_out = LLAMA_CPP_STORAGE.llm.create_chat_completion(
-                messages=chinese_messages, seed=seed, **_parameters
-            )
-            chinese_text = chinese_out['choices'][0]['message']['content'].removeprefix(": ").strip()
-
-        if force_offload:
-            LLAMA_CPP_STORAGE.clean()
-
-        gc.collect()
-        mm.soft_empty_cache()
-
-        if output_language == "仅英文":
-            return (text, "")
-        if output_language == "仅中文":
-            return ("", text)
-        return (text, chinese_text)
-
 
 NODE_CLASS_MAPPINGS = {
     "llama_cpp_model_loader": llama_cpp_model_loader,
     "llama_cpp_instruct_adv": llama_cpp_instruct_adv,
     "llama_cpp_parameters": llama_cpp_parameters,
     "llama_cpp_unload_model": llama_cpp_unload_model,
-    "llama_cpp_clean_states": llama_cpp_clean_states,
-    "llama_cpp_image_recognition": llama_cpp_image_recognition,
-    "llama_cpp_image_input_switch": llama_cpp_image_input_switch,
-    "llama_cpp_prompt_optimizer": llama_cpp_prompt_optimizer,
     "parse_json_node": parse_json_node,
     "json_to_bbox": json_to_bbox,
     "bbox_to_segs": bbox_to_segs,
@@ -1792,9 +1310,6 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "llama_cpp_instruct_adv": "Llama-cpp Instruct",
     "llama_cpp_parameters": "Llama-cpp Parameters",
     "llama_cpp_unload_model": "Llama-cpp Unload Model",
-    "llama_cpp_clean_states": "Llama-cpp Clean States",
-    "llama_cpp_image_recognition": "Llama-cpp Image Recognition",
-    "llama_cpp_image_input_switch": "Llama-cpp Dynamic Image Switch",
     "parse_json_node": "Parse JSON",
     "json_to_bbox": "JSON to BBoxes",
     "bbox_to_segs": "BBoxes to SEGS",

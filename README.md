@@ -23,8 +23,6 @@ python -m pip install -r ComfyUI-llama-cpp/requirements.txt
 
 - **LLM Text Generation** — Run any GGUF language model for text completion and chat
 - **VLM Vision Understanding** — Support for LLaVA 1.5/1.6, Moondream2, nanoLLaVA, Llama3-Vision-Alpha, MiniCPM-v2.6/v4.5, Gemma3/4, Qwen2.5-VL, Qwen3-VL, Qwen3.5, GLM-4.1V/4.6V, LFM2-VL/LFM2.5-VL, Granite-Docling
-- **Image Recognition** — Dynamic image input recognition with multiple presets (Describe, Tags, Objects, Scene, OCR, etc.)
-- **Dynamic Image Switch** — Auto-detect image input and switch between text-only and vision modes
 - **Bounding Box Detection** — JSON-based object detection with bbox output compatible with ComfyUI's BBOX/SEGS/MASK pipeline
 - **Video Understanding** — Process image sequences as video frames for video understanding
 - **Prompt Enhancement** — Built-in prompt enhancer presets for Qwen-Image, Flux.2, Wan, Z-Image Turbo, and more
@@ -36,13 +34,9 @@ python -m pip install -r ComfyUI-llama-cpp/requirements.txt
 | Node | Description |
 |------|-------------|
 | `Llama-cpp Model Loader` | Load GGUF models with optional mmproj for vision |
-| `Llama-cpp Instruct` | Main inference node with multi-image, video, and conversation support |
-| `Llama-cpp Prompt Optimizer` | Standalone MiniMax-H3 / Qwen-Image-2.1 prompt optimization (EN/ZH/bilingual output) |
+| `Llama-cpp Instruct` | Main inference node with multi-image, video, conversation, and built-in MiniMax-H3 / Qwen-Image-2.1 prompt optimization support |
 | `Llama-cpp Parameters` | Configure generation parameters (temperature, top-p, etc.) |
-| `Llama-cpp Image Recognition` | Recognize images with preset modes (Describe, Tags, OCR, etc.) |
-| `Llama-cpp Dynamic Image Switch` | Auto-detect images and switch between text/vision modes |
 | `Llama-cpp Unload Model` | Manually unload model to free VRAM |
-| `Llama-cpp Clean States` | Clear saved conversation states |
 | `Parse JSON` | Parse JSON strings with key extraction |
 | `JSON to BBoxes` | Convert JSON detection results to BBOX format |
 | `BBoxes to SEGS` | Convert BBOX to ComfyUI SEGS format |

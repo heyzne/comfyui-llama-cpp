@@ -21,6 +21,10 @@ python -m pip install -r ComfyUI-llama-cpp/requirements.txt
 
 ## 更新日志
 
+#### v1.4.1
+- **精简节点**: 移除 `Llama-cpp Clean States` / `Llama-cpp Image Recognition` / `Llama-cpp Dynamic Image Switch` 及独立提示词优化节点 (功能已内置于 Instruct 节点).
+  > 提示词优化请直接使用 `Llama-cpp Instruct` 节点的 `generation_mode` / `output_language` / `no_bgm` 参数, 优化结果从新增的 `optimized_prompt` 输出口获取.
+
 #### v1.4.0
 - **新增提示词优化**: Instruct 节点内置 MiniMax-H3 / Qwen-Image-2.1 专用提示词优化 (generation_mode, 默认 None 关闭), 支持中英文输出, 优化后的提示词通过新增的 `optimized_prompt` 输出口输出.
 - **新增独立提示词优化节点** (`Llama-cpp Prompt Optimizer`): 仅优化不推理, 输出 english_prompt / chinese_prompt.
