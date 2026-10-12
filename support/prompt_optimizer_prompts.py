@@ -376,6 +376,29 @@ PROMPT_TRANSLATE_TO_CHINESE_SYSTEM = """Translate the supplied optimized generat
 Preserve every requirement, field name, reference label, tag, timestamp, number, quoted on-image text, dialogue, lyric, and formatting structure exactly. Translate descriptive prose only; dialogue, lyrics, and visible text must remain in their original language. Do not optimize, rewrite, add, omit, summarize, explain, or add headings. Output only the translated Chinese prompt."""
 
 
+# 参考图自动反推提示词 (用于优化前对每张参考图生成内容描述)
+IMAGE_CAPTION_PROMPT = (
+    "Describe this image in detail, including the main subject, appearance, clothing, pose, "
+    "expression, setting, colors, lighting, and composition. Output the description only, "
+    "without any preamble."
+)
+
+
+def build_reference_captions_block(image_descriptions):
+    """将参考图反推描述格式化为注入优化请求的文本块。Image N 对应 <imageN>/<Picture N>。"""
+    if not image_descriptions:
+        return ""
+    lines = [
+        "[Reference Image Captions] Auto-caption of each reference image "
+        "(Image N corresponds to the reference label <imageN>/<Picture N>):"
+    ]
+    for i, cap in enumerate(image_descriptions):
+        cap = (cap or "").strip()
+        if cap:
+            lines.append(f"Image {i + 1}: {cap}")
+    return "\n".join(lines) if len(lines) > 1 else ""
+
+
 def build_qwen_image_system_prompt(generation_mode, output_language):
     """Build the Qwen-Image-2.1 monolingual system prompt; call twice for bilingual."""
     base = (
@@ -446,9 +469,11 @@ H3_MODE_HINTS = {
 
 
 def build_h3_user_message(user_prompt, generation_mode, image_count=0,
-                          no_bgm=False, extra_requirements=""):
+                          no_bgm=False, extra_requirements="",
+                          image_descriptions=None):
     """Build the H3 user message. generation_mode may be the full combo label
-    ('H3 - 文生视频 (T2VA)') or the English core name."""
+    ('H3 - 文生视频 (T2VA)') or the English core name. image_descriptions is the
+    auto-caption list of reference images (index N -> <Picture N+1>)."""
     generation_mode = normalize_h3_mode(generation_mode)
     parts = [f"[Generation Mode] {generation_mode}"]
 
@@ -466,7 +491,10 @@ def build_h3_user_message(user_prompt, generation_mode, image_count=0,
         parts.append(
             f"[Reference Images] {image_count} image(s) uploaded, labeled <Picture 1>..<Picture {image_count}> in order.\n"
             "Please write clear labels and usage for each image. "
-            "Analyze subject appearance, scene style, composition, etc. from the images and incorporate into the prompt optimization."
+            "Analyze subject appearance, scene style, composition, etc. from the images and incorporate into the prompt optimization.\n"
+            + (build_reference_captions_block(image_descriptions) + "\n" if image_descriptions else "")
+            + "If the user prompt refers to images by ordinal names such as \"图1/图2\", \"图片1\", or \"image 1\", "
+            "map them in order to the standard labels <Picture 1>..<Picture N> and keep the mapping consistent."
         )
         if generation_mode == "Text to Video (T2VA)":
             parts.append(
@@ -490,8 +518,9 @@ def build_h3_user_message(user_prompt, generation_mode, image_count=0,
 
 
 def build_qwen_image_user_message(user_prompt, generation_mode, image_count=0,
-                                  extra_requirements=""):
-    """Build the Qwen-Image-2.1 user message. Returns (message, image_label)."""
+                                  extra_requirements="", image_descriptions=None):
+    """Build the Qwen-Image-2.1 user message. image_descriptions is the auto-caption
+    list of reference images (index N -> <image N+1>)."""
     mode_hint = {
         "Qwen-Image-2.1 - 文生图": "Task: text-to-image. Build a complete image description from text.",
         "Qwen-Image-2.1 - 图像编辑": "Task: image editing. Apply only the requested changes and preserve every unrelated visual attribute.",
@@ -561,7 +590,10 @@ def build_qwen_image_user_message(user_prompt, generation_mode, image_count=0,
         refs = ", ".join(f"<image{i + 1}>" for i in range(image_count))
         parts.append(
             f"[Reference Images] {image_count} image(s) uploaded: {refs}. "
-            "Analyze their visible details before writing the optimized prompt."
+            "Analyze their visible details before writing the optimized prompt.\n"
+            + (build_reference_captions_block(image_descriptions) + "\n" if image_descriptions else "")
+            + "If the user prompt refers to images by ordinal names such as \"图1/图2\", \"图片1\", or \"image 1\", "
+            "map them in order to the standard tags <image1>, <image2>, ... and use ONLY these standard tags in the output."
         )
     parts.append("Output the optimized prompt directly without any explanation.")
     return "\n".join(parts)

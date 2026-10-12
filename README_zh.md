@@ -21,6 +21,10 @@ python -m pip install -r ComfyUI-llama-cpp/requirements.txt
 
 ## 更新日志
 
+#### v1.4.2
+- **提示词优化增强**: 选择 `generation_mode` 且连接参考图时, 优化前先逐张**反推**参考图内容, 反推描述与自定义提示词一并交给对应 skill 改写, 生成规范的编辑提示词 (自动将 "图1/图2" 等序数词引用映射为 `<image1>/<image2>` / `<Picture N>` 标准标签).
+  > 示例: 输入 "图1的女人坐在图2的黄色沙发上" + 2 张参考图 → 优化器结合两张图的反推内容, 输出符合 Qwen-Image-2.1 编辑规范的提示词.
+
 #### v1.4.1
 - **精简节点**: 移除 `Llama-cpp Clean States` / `Llama-cpp Image Recognition` / `Llama-cpp Dynamic Image Switch` 及独立提示词优化节点 (功能已内置于 Instruct 节点).
   > 提示词优化请直接使用 `Llama-cpp Instruct` 节点的 `generation_mode` / `output_language` / `no_bgm` 参数, 优化结果从新增的 `optimized_prompt` 输出口获取.

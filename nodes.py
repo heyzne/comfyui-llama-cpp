@@ -22,6 +22,7 @@ from .support.prompt_optimizer_prompts import (
     build_messages,
     normalize_h3_mode,
     PROMPT_TRANSLATE_TO_CHINESE_SYSTEM,
+    IMAGE_CAPTION_PROMPT,
 )
 
 import folder_paths
@@ -661,11 +662,24 @@ class llama_cpp_instruct_adv:
             if _src:
                 # 参考图一并送入优化 pass (已限制最长边 1024)
                 opt_uris = []
+                opt_captions = []
                 if images is not None:
                     if not _chat_handler_has_vision(LLAMA_CPP_STORAGE.chat_handler):
                         raise ValueError("Image input detected, but the loaded model is not configured with a mmproj module.")
                     for img in images:
                         opt_uris.extend(_image_to_data_uris(img))
+                    # 反推 pass: 逐张描述参考图内容, 作为 skill 优化的上下文
+                    print(f"[llama-cpp_vlm] Prompt Optimizer: auto-captioning {len(opt_uris)} reference image(s)...")
+                    for uri in opt_uris:
+                        cap_messages = [
+                            {"role": "user", "content": [
+                                {"type": "text", "text": IMAGE_CAPTION_PROMPT},
+                                {"type": "image_url", "image_url": {"url": uri}},
+                            ]}
+                        ]
+                        cap_out = LLAMA_CPP_STORAGE.llm.create_chat_completion(messages=cap_messages, seed=seed, **_parameters)
+                        opt_captions.append(cap_out['choices'][0]['message']['content'].removeprefix(": ").strip())
+                    print(f"[llama-cpp_vlm] Prompt Optimizer: captions ready ({len(opt_captions)}).")
 
                 if generation_mode.startswith("H3"):
                     core_mode = normalize_h3_mode(generation_mode)
@@ -675,6 +689,7 @@ class llama_cpp_instruct_adv:
                         opt_system = build_h3_system_prompt(_opt_lang)
                     opt_user = build_h3_user_message(
                         _src, core_mode, image_count=len(opt_uris), no_bgm=no_bgm,
+                        image_descriptions=opt_captions,
                     )
                     opt_label = "<Picture {n}>"
                 else:
@@ -684,6 +699,7 @@ class llama_cpp_instruct_adv:
                         opt_system = build_qwen_image_system_prompt(generation_mode, _opt_lang)
                     opt_user = build_qwen_image_user_message(
                         _src, generation_mode, image_count=len(opt_uris),
+                        image_descriptions=opt_captions,
                     )
                     opt_label = "<image{n}>"
 
