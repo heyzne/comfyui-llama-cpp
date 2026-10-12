@@ -669,7 +669,6 @@ class llama_cpp_instruct_adv:
                     for img in images:
                         opt_uris.extend(_image_to_data_uris(img))
                     # 反推 pass: 逐张描述参考图内容, 作为 skill 优化的上下文
-                    print(f"[llama-cpp_vlm] Prompt Optimizer: auto-captioning {len(opt_uris)} reference image(s)...")
                     for uri in opt_uris:
                         cap_messages = [
                             {"role": "user", "content": [
@@ -679,7 +678,6 @@ class llama_cpp_instruct_adv:
                         ]
                         cap_out = LLAMA_CPP_STORAGE.llm.create_chat_completion(messages=cap_messages, seed=seed, **_parameters)
                         opt_captions.append(cap_out['choices'][0]['message']['content'].removeprefix(": ").strip())
-                    print(f"[llama-cpp_vlm] Prompt Optimizer: captions ready ({len(opt_captions)}).")
 
                 if generation_mode.startswith("H3"):
                     core_mode = normalize_h3_mode(generation_mode)
@@ -703,14 +701,12 @@ class llama_cpp_instruct_adv:
                     )
                     opt_label = "<image{n}>"
 
-                print(f"[llama-cpp_vlm] Prompt Optimizer: optimizing prompt ({generation_mode}, {_opt_lang})...")
                 opt_messages = build_messages(opt_system, opt_user, opt_uris, opt_label)
                 opt_output = LLAMA_CPP_STORAGE.llm.create_chat_completion(messages=opt_messages, seed=seed, **_parameters)
                 opt_text = opt_output['choices'][0]['message']['content'].removeprefix(": ").strip()
 
                 # 双语: 第二次推理将英文精确翻译为中文; 主推理使用英文版
                 if _opt_lang == "中英双语":
-                    print("[llama-cpp_vlm] Prompt Optimizer: translating Chinese version...")
                     zh_messages = build_messages(
                         PROMPT_TRANSLATE_TO_CHINESE_SYSTEM,
                         "[English prompt to translate]\n" + opt_text,
@@ -723,9 +719,6 @@ class llama_cpp_instruct_adv:
 
                 # 优化后的提示词替换原始 custom_prompt 进入主推理
                 custom_prompt = opt_text
-                print(f"[llama-cpp_vlm] Prompt Optimizer: optimized prompt:\n{optimized_prompt}\n")
-            else:
-                print("[llama-cpp_vlm] Prompt Optimizer: skipped (empty prompt).")
         elif generation_mode and generation_mode != "None" and "*" in preset_prompt:
             print("[llama-cpp_vlm] Prompt Optimizer: skipped (detection preset with '*' placeholder).")
 
