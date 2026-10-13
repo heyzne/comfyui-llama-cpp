@@ -399,6 +399,18 @@ def build_reference_captions_block(image_descriptions):
     return "\n".join(lines) if len(lines) > 1 else ""
 
 
+# 用户文字意图优先级规则: 自定义提示词中描述的动作/事件(如唱歌、跳舞、对话)即使
+# 参考图中不可见甚至与画面矛盾, 也必须保留在优化结果中; 参考图只提供外观/场景/风格。
+USER_INTENT_PRIORITY_RULE = (
+    "[Priority Rule] The User Original Prompt is the PRIMARY creative intent and has the HIGHEST priority. "
+    "Every action, event, behavior, and requirement it describes (e.g. singing, dancing, speaking, crying) "
+    "MUST be explicitly and faithfully preserved in the optimized prompt, even if the reference images do not "
+    "show that action or seem to suggest something different (e.g. the subject holds an instrument - if the user "
+    "says she is singing, she IS singing). Reference images ONLY provide subject appearance, clothing, props, "
+    "scene, and style; they must NEVER override, replace, or omit the actions and content requested by the user."
+)
+
+
 def build_qwen_image_system_prompt(generation_mode, output_language):
     """Build the Qwen-Image-2.1 monolingual system prompt; call twice for bilingual."""
     base = (
@@ -484,6 +496,7 @@ def build_h3_user_message(user_prompt, generation_mode, image_count=0,
     prompt_text = (user_prompt or "").strip()
     if prompt_text:
         parts.append(f"[User Original Prompt]\n{prompt_text}")
+        parts.append(USER_INTENT_PRIORITY_RULE)
     else:
         parts.append("[User Original Prompt]\nNo text prompt was provided. Follow the selected mode and use any attached reference images as context.")
 
@@ -583,6 +596,7 @@ def build_qwen_image_user_message(user_prompt, generation_mode, image_count=0,
     prompt_text = (user_prompt or "").strip()
     if prompt_text:
         parts.append(f"[User Original Prompt]\n{prompt_text}")
+        parts.append(USER_INTENT_PRIORITY_RULE)
     else:
         parts.append("[User Original Prompt]\nNo text prompt was provided. Follow the selected prompt rules and use any attached reference images as context.")
 

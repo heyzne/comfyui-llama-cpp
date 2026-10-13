@@ -512,15 +512,15 @@ class llama_cpp_instruct_adv:
                 "llama_model": ("LLAMACPPMODEL",),
                 "preset_prompt": (preset_tags, {"default": preset_tags[1]}),
                 "custom_prompt": ("STRING", {"default": "", "multiline": True, "placeholder": 'user_prompt\n\nFor preset hints marked with an "*", this will be used to fill the placeholder (e.g., Object names in BBox detection)\nOtherwise, this will override the preset prompts.'}),
-                "generation_mode": (["None"] + PROMPT_OPTIMIZER_MODES, {
+                "生成模式": (["None"] + PROMPT_OPTIMIZER_MODES, {
                     "default": "None",
                     "tooltip": "提示词优化: 推理前先用 LLM 将 Prompt 改写为 MiniMax-H3 / Qwen-Image-2.1 专用提示词, 再用优化后的提示词进行主推理。\nNone = 关闭优化。\n参考 ComfyUI-xiaozhuguang (MIT) 移植。"
                 }),
-                "output_language": (["仅英文", "仅中文", "中英双语"], {
+                "输出语言": (["仅英文", "仅中文", "中英双语"], {
                     "default": "仅英文",
-                    "tooltip": "提示词优化的输出语言 (仅 generation_mode 非 None 时生效)。仅输出一种语言可减少生成 token 和耗时"
+                    "tooltip": "提示词优化的输出语言 (仅 生成模式 非 None 时生效)。仅输出一种语言可减少生成 token 和耗时"
                 }),
-                "no_bgm": ("BOOLEAN", {
+                "无背景音乐": ("BOOLEAN", {
                     "default": False,
                     "tooltip": "提示词优化: 无背景音乐 (仅 H3 模式生效, non_diegetic_music = N/A)"
                 }),
@@ -589,7 +589,7 @@ class llama_cpp_instruct_adv:
                         item["image_url"]["url"] = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAACXBIWXMAAAsTAAALEwEAmpwYAAAADElEQVQImWP4//8/AAX+Av5Y8msOAAAAAElFTkSuQmCC"
         return clean_messages
     
-    def process(self, llama_model, preset_prompt, custom_prompt, generation_mode, output_language, no_bgm, system_prompt, inference_mode, max_frames, max_size, seed, force_offload, save_states, unique_id, parameters=None, images=None, image_1=None, image_2=None, image_3=None, image_4=None, image_5=None, image_6=None, image_7=None, image_8=None, image_9=None, image_10=None):
+    def process(self, llama_model, preset_prompt, custom_prompt, 生成模式, 输出语言, 无背景音乐, system_prompt, inference_mode, max_frames, max_size, seed, force_offload, save_states, unique_id, parameters=None, images=None, image_1=None, image_2=None, image_3=None, image_4=None, image_5=None, image_6=None, image_7=None, image_8=None, image_9=None, image_10=None):
         # 合并所有图像输入（含旧版工作流使用的 images 批量槽），平坦化为单张图像列表（不限制尺寸）
         all_images = []
         if images is not None:
@@ -654,8 +654,8 @@ class llama_cpp_instruct_adv:
         # 推理前先用 LLM 将输入 Prompt 改写为专用优化提示词, 再用优化结果进行主推理。
         # 参考 ComfyUI-xiaozhuguang (MIT License, Copyright (c) 2025 xiaozhuguang) 移植。
         optimized_prompt = ""
-        _opt_lang = output_language if output_language in ("仅英文", "仅中文", "中英双语") else "仅英文"
-        if generation_mode and generation_mode != "None" and "*" not in preset_prompt:
+        _opt_lang = 输出语言 if 输出语言 in ("仅英文", "仅中文", "中英双语") else "仅英文"
+        if 生成模式 and 生成模式 != "None" and "*" not in preset_prompt:
             _src = custom_prompt.strip()
             if not _src:
                 _src = preset_prompts[preset_prompt].replace("#", "").replace("@", "video" if video_input else "image").strip()
@@ -679,24 +679,24 @@ class llama_cpp_instruct_adv:
                         cap_out = LLAMA_CPP_STORAGE.llm.create_chat_completion(messages=cap_messages, seed=seed, **_parameters)
                         opt_captions.append(cap_out['choices'][0]['message']['content'].removeprefix(": ").strip())
 
-                if generation_mode.startswith("H3"):
-                    core_mode = normalize_h3_mode(generation_mode)
+                if 生成模式.startswith("H3"):
+                    core_mode = normalize_h3_mode(生成模式)
                     if _opt_lang == "中英双语":
                         opt_system = build_h3_system_prompt("仅英文")
                     else:
                         opt_system = build_h3_system_prompt(_opt_lang)
                     opt_user = build_h3_user_message(
-                        _src, core_mode, image_count=len(opt_uris), no_bgm=no_bgm,
+                        _src, core_mode, image_count=len(opt_uris), no_bgm=无背景音乐,
                         image_descriptions=opt_captions,
                     )
                     opt_label = "<Picture {n}>"
                 else:
                     if _opt_lang == "中英双语":
-                        opt_system = build_qwen_image_system_prompt(generation_mode, "仅英文")
+                        opt_system = build_qwen_image_system_prompt(生成模式, "仅英文")
                     else:
-                        opt_system = build_qwen_image_system_prompt(generation_mode, _opt_lang)
+                        opt_system = build_qwen_image_system_prompt(生成模式, _opt_lang)
                     opt_user = build_qwen_image_user_message(
-                        _src, generation_mode, image_count=len(opt_uris),
+                        _src, 生成模式, image_count=len(opt_uris),
                         image_descriptions=opt_captions,
                     )
                     opt_label = "<image{n}>"
@@ -719,7 +719,7 @@ class llama_cpp_instruct_adv:
 
                 # 优化后的提示词替换原始 custom_prompt 进入主推理
                 custom_prompt = opt_text
-        elif generation_mode and generation_mode != "None" and "*" in preset_prompt:
+        elif 生成模式 and 生成模式 != "None" and "*" in preset_prompt:
             print("[llama-cpp_vlm] Prompt Optimizer: skipped (detection preset with '*' placeholder).")
 
         out1 = ""
