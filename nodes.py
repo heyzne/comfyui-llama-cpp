@@ -636,9 +636,9 @@ class llama_cpp_instruct_adv:
                     "tooltip": "提示词优化: 无背景音乐 (仅 H3 模式生效, non_diegetic_music = N/A)"
                 }),
                 "system_prompt": ("STRING", {"multiline": True, "default": ""}),
-                "inference_mode": (["one by one", "images", "video"], {
+                "inference_mode": (["one by one", "images", "video", "image + video"], {
                     "default": "one by one",
-                    "tooltip": "one by one: Read one image at a time\nimages:  \tRead all images at once\nvideo:  \tTreat the input images as video"
+                    "tooltip": "one by one: Read one image at a time\nimages:  \tRead all images at once\nvideo:  \tTreat the input images as video\nimage + video:  video 口当视频(按 max_frames 采样), images/image_N 当独立图片(全部保留)"
                 }),
                 "max_frames": ("INT", {
                     "default": 24,
@@ -707,9 +707,11 @@ class llama_cpp_instruct_adv:
         # 合并所有图像输入（含旧版工作流使用的 images 批量槽），平坦化为单张图像列表（不限制尺寸）
         # video 槽为 IMAGE 类型 (帧序列视为一段视频), 排在 images/image_N 之前
         all_images = []
+        n_video = 0
         if video is not None:
             for b in range(video.shape[0]):
                 all_images.append(video[b:b+1])
+            n_video = len(all_images)
         if images is not None:
             for b in range(images.shape[0]):
                 all_images.append(images[b:b+1])
@@ -749,7 +751,7 @@ class llama_cpp_instruct_adv:
         uid = unique_id.rpartition('.')[-1] if _uid in (None, -1) else _uid
         
         last_sys_prompt = LLAMA_CPP_STORAGE.sys_prompts.get(f"{uid}", None)
-        video_input = inference_mode == "video"
+        video_input = inference_mode in ("video", "image + video")
         system_prompts = "请将输入的图片序列当做视频而不是静态帧序列, " + system_prompt if video_input else system_prompt
         if last_sys_prompt != system_prompts:
             messages = []
@@ -786,46 +788,51 @@ class llama_cpp_instruct_adv:
                 _n_ctx = _model_n_ctx()
                 _reserve = int(_parameters.get("max_tokens", 1024) or 1024) + 64
 
-                # 反推 pass: 图片逐张描述; 视频模式按「一段视频」整体反推 (采样帧 + 时间线描述)
+                # 反推 pass: 视频部分按「一段视频」整体反推 (采样帧 + 时间线描述);
+                # 图片部分逐张描述。两者可同时存在 ("image + video" 模式)。
                 opt_captions = []
                 cap_uris = []
                 _video_desc = ""
+                opt_images = []
+                _caption_start = 1
                 if has_images:
                     _cap_size = _fit_image_size(_estimate_text_tokens(IMAGE_CAPTION_PROMPT), 1, _n_ctx, _reserve)
-                    if video_input and len(images) > 1:
-                        # 视频反推: 均匀采样最多 8 帧, 一次调用整体描述动作/运镜/时间变化
-                        opt_images = [images[i] for i in np.linspace(0, len(images) - 1, min(8, len(images)), dtype=int)]
-                        cap_uris = []
-                        for img in opt_images:
-                            cap_uris.extend(_image_to_data_uris(img, _cap_size))
-                        cap_messages = [{"role": "user", "content": [
-                            {"type": "text", "text": VIDEO_CAPTION_PROMPT},
-                        ] + [{"type": "image_url", "image_url": {"url": u}} for u in cap_uris]}]
-                        for _n_try in (len(cap_uris), 4, 2):
-                            if _n_try < len(cap_uris):
-                                # 上下文放不下时减少帧数重试
-                                cap_messages = [{"role": "user", "content": [
-                                    {"type": "text", "text": VIDEO_CAPTION_PROMPT},
-                                ] + [{"type": "image_url", "image_url": {"url": u}} for u in cap_uris[:_n_try]]}]
+                    _vid_part = images[:n_video] if (video_input and n_video > 1) else []
+                    _img_part = images[n_video:] if _vid_part else images
+
+                    if _vid_part:
+                        # 视频部分: 均匀采样最多 8 帧, 一次调用整体描述动作/运镜/时间变化
+                        _sampled = [_vid_part[i] for i in np.linspace(0, len(_vid_part) - 1, min(8, len(_vid_part)), dtype=int)]
+                        _v_uris = []
+                        for img in _sampled:
+                            _v_uris.extend(_image_to_data_uris(img, _cap_size))
+                        for _n_try in (len(_v_uris), 4, 2):
+                            if _n_try > len(_v_uris):
+                                continue
+                            cap_messages = [{"role": "user", "content": [
+                                {"type": "text", "text": VIDEO_CAPTION_PROMPT},
+                            ] + [{"type": "image_url", "image_url": {"url": u}} for u in _v_uris[:_n_try]]}]
                             try:
                                 cap_out = LLAMA_CPP_STORAGE.llm.create_chat_completion(messages=cap_messages, seed=seed, **_parameters)
                                 _video_desc = cap_out['choices'][0]['message']['content'].removeprefix(": ").strip()
-                                cap_uris = cap_uris[:_n_try]
+                                # 采样帧排在参考序列最前, 与 <Picture 1..N>/<image1..N> 标签顺序一致
+                                opt_images.extend(_sampled[:_n_try])
+                                cap_uris.extend(_v_uris[:_n_try])
+                                _caption_start = _n_try + 1
                                 break
                             except RuntimeError as e:
                                 if not _is_context_error(e):
                                     raise
                                 continue  # 减帧重试
-                    else:
-                        # 图片/逐帧模式: 帧数超过 8 时均匀采样 8 张做反推与优化参考,
-                        # 避免长视频逐帧反推耗时过长 (主推理仍按所选模式处理全部帧)
-                        if len(images) > 8:
-                            opt_images = [images[i] for i in np.linspace(0, len(images) - 1, 8, dtype=int)]
-                        else:
-                            opt_images = images
-                        for img in opt_images:
-                            cap_uris.extend(_image_to_data_uris(img, _cap_size))
-                        for uri in cap_uris:
+
+                    # 图片部分: 逐张描述 (超过 8 张时均匀采样, 避免长序列耗时过长)
+                    if len(_img_part) > 8:
+                        _img_part = [_img_part[i] for i in np.linspace(0, len(_img_part) - 1, 8, dtype=int)]
+                    for img in _img_part:
+                        _u = _image_to_data_uris(img, _cap_size)
+                        cap_uris.extend(_u)
+                        opt_images.append(img)
+                        for uri in _u:
                             cap_messages = [
                                 {"role": "user", "content": [
                                     {"type": "text", "text": IMAGE_CAPTION_PROMPT},
@@ -852,6 +859,7 @@ class llama_cpp_instruct_adv:
                             _src, _core, image_count=image_count, no_bgm=无背景音乐,
                             image_descriptions=opt_captions,
                             video_description=_video_desc,
+                            caption_start_index=_caption_start,
                         )
                         return _sys, _user, "<Picture {n}>"
                     _sys = build_qwen_image_system_prompt(生成模式, "仅英文")
@@ -859,6 +867,7 @@ class llama_cpp_instruct_adv:
                         _src, 生成模式, image_count=image_count,
                         image_descriptions=opt_captions,
                         video_description=_video_desc,
+                        caption_start_index=_caption_start,
                     )
                     return _sys, _user, "<image{n}>"
 
@@ -948,8 +957,13 @@ class llama_cpp_instruct_adv:
                 
             frames = images
             if video_input:
-                indices = np.linspace(0, len(images) - 1, max_frames, dtype=int)
-                frames = [images[i] for i in indices]
+                # 仅对 video 口传入的帧按 max_frames 均匀采样; images/image_N 全部保留
+                _vid_part = frames[:n_video]
+                _img_part = frames[n_video:]
+                if len(_vid_part) > 1:
+                    indices = np.linspace(0, len(_vid_part) - 1, max_frames, dtype=int)
+                    _vid_part = [_vid_part[i] for i in indices]
+                frames = _vid_part + _img_part
                 
             if inference_mode == "one by one":
                 tmp_list = []
