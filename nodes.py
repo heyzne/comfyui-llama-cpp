@@ -344,6 +344,39 @@ def image2base64(image):
     img_base64 = base64.b64encode(buffered.getvalue()).decode('utf-8')
     return img_base64
 
+def _video_to_images(video):
+    """将 ComfyUI VIDEO 输出转换为 IMAGE 批量张量 (N, H, W, C)。
+
+    兼容两种实现: 核心视频类型 (iter_frames) 与 get_components 风格 (如部分扩展节点)。
+    """
+    frames = []
+    if hasattr(video, "iter_frames"):
+        for f in video.iter_frames():
+            t = f if torch.is_tensor(f) else torch.from_numpy(np.asarray(f))
+            if t.ndim == 3:
+                t = t.unsqueeze(0)
+            frames.append(t.to(dtype=torch.float32))
+    elif hasattr(video, "get_components"):
+        imgs = video.get_components()[0]
+        if torch.is_tensor(imgs):
+            if imgs.ndim == 3:
+                imgs = imgs.unsqueeze(0)
+            return imgs.to(dtype=torch.float32)
+        for f in imgs:
+            t = f if torch.is_tensor(f) else torch.from_numpy(np.asarray(f))
+            if t.ndim == 3:
+                t = t.unsqueeze(0)
+            frames.append(t.to(dtype=torch.float32))
+    else:
+        raise TypeError(
+            f"Unsupported VIDEO input type: {type(video).__name__}. "
+            "Please connect a ComfyUI video source (Load Video / VHS nodes)."
+        )
+    if not frames:
+        raise RuntimeError("The connected VIDEO input contains no decodable frames.")
+    return torch.cat(frames, dim=0)
+
+
 def _image_to_data_uris(images, max_size=1024):
     """将 ComfyUI IMAGE 张量（单张或批量）转为 base64 JPEG data URI 列表，最长边限制 max_size。"""
     uris = []
@@ -669,6 +702,9 @@ class llama_cpp_instruct_adv:
             },
             "optional": {
                 "parameters": ("LLAMACPPARAMS",),
+                "video": ("VIDEO", {
+                    "tooltip": "视频输入 (Load Video / VHS 等视频源)。\n自动抽取全部帧并入图片流水线; 建议搭配 推理模式=video 使用 (整体反推 + 按视频优化)。\n与 images/image_N 同时连接时, 视频帧排在图片之后。"
+                }),
                 "images": ("IMAGE", {"tooltip": "Input image batch (legacy slot kept for backward compatibility with old workflows)."}),
                 "image_1": ("IMAGE", {"tooltip": "Input image 1. Connect more to auto-add slots."}),
                 "image_2": ("IMAGE", {"tooltip": "Input image 2"}),
@@ -700,9 +736,13 @@ class llama_cpp_instruct_adv:
                         item["image_url"]["url"] = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAACXBIWXMAAAsTAAALEwEAmpwYAAAADElEQVQImWP4//8/AAX+Av5Y8msOAAAAAElFTkSuQmCC"
         return clean_messages
     
-    def process(self, llama_model, preset_prompt, custom_prompt, 生成模式, 无背景音乐, system_prompt, inference_mode, max_frames, max_size, seed, force_offload, save_states, unique_id, parameters=None, images=None, image_1=None, image_2=None, image_3=None, image_4=None, image_5=None, image_6=None, image_7=None, image_8=None, image_9=None, image_10=None):
+    def process(self, llama_model, preset_prompt, custom_prompt, 生成模式, 无背景音乐, system_prompt, inference_mode, max_frames, max_size, seed, force_offload, save_states, unique_id, parameters=None, video=None, images=None, image_1=None, image_2=None, image_3=None, image_4=None, image_5=None, image_6=None, image_7=None, image_8=None, image_9=None, image_10=None):
         # 合并所有图像输入（含旧版工作流使用的 images 批量槽），平坦化为单张图像列表（不限制尺寸）
         all_images = []
+        if video is not None:
+            vid_frames = _video_to_images(video)
+            for b in range(vid_frames.shape[0]):
+                all_images.append(vid_frames[b:b+1])
         if images is not None:
             for b in range(images.shape[0]):
                 all_images.append(images[b:b+1])

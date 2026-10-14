@@ -21,6 +21,9 @@ python -m pip install -r ComfyUI-llama-cpp/requirements.txt
 
 ## 更新日志
 
+#### v1.4.9
+- **新增 VIDEO 视频输入口**: `Llama-cpp Instruct` 节点新增 `video` 输入端口, 可直接连接 Load Video / VHS 等视频源节点。自动抽取全部帧并入图片流水线; 配合 `推理模式=video` 使用时, 提示词优化前会先对视频整体反推 (采样≤8 帧)。与 images/image_N 同时连接时视频帧排在图片之后。旧工作流不受影响。
+
 #### v1.4.8
 - **新增视频反推**: 推理模式为 `video` 且连接多帧时, 提示词优化前先将输入帧视为**一段视频**整体反推 (均匀采样最多 8 帧, 单次调用描述主体动作/运镜/时间变化), 反推描述以 `[Reference Video]` 块注入优化请求; 上下文不足时自动 8→4→2 帧减帧重试, 最终兜底纯文本优化。图片模式逐张反推行为不变。
 - **max_tokens 上限放开**: `Llama-cpp Parameters` 的 `max_tokens` 上限由 4096 提升至 32768。
