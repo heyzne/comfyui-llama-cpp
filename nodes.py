@@ -14,7 +14,6 @@ from .support.gguf_layers import get_layer_count
 from .support.prompt_enhancer_preset import *
 from .support.prompt_optimizer_prompts import (
     PROMPT_OPTIMIZER_MODES,
-    H3_OUTPUT_FORMATS,
     build_h3_system_prompt,
     build_qwen_image_system_prompt,
     build_h3_user_message,
@@ -854,7 +853,7 @@ class llama_cpp_instruct_adv:
                     """
                     if 生成模式.startswith("H3"):
                         _core = normalize_h3_mode(生成模式)
-                        _sys = build_h3_system_prompt("仅英文")
+                        _sys = build_h3_system_prompt(生成模式, "仅英文")
                         _user = build_h3_user_message(
                             _src, _core, image_count=image_count, no_bgm=无背景音乐,
                             image_descriptions=opt_captions,

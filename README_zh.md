@@ -21,6 +21,13 @@ python -m pip install -r ComfyUI-llama-cpp/requirements.txt
 
 ## 更新日志
 
+#### v1.5.4
+- **H3 skill 全面替换为官方格式**: 参考 [ComfyUI-MiniMax-H3-Promptor](https://github.com/1038lab/ComfyUI-MiniMax-H3-Promptor) (GPL-3.0) 所用的 MiniMax H3 官方 skill 结构重写 (独立实现, 未逐字复制)。新输出格式: 定时 `[Shot 1]...[Shot N] At MM:SS.mmm` 段落 + 结尾 `Audio:` / `Music:` 两行, **不再使用** integrated_multimodal_description / 六段式字段头。
+  - 导演底座: 群像编排与题材自适应、前景/中景/背景同框空间调度、按时长的分镜预算 (4-6s: 1-2 镜; 7-10s: 2-3 镜; 11-15s: 3-5 镜)、动作衔接转场、官方对白语法 `<Subject N> (SN) ... says: <d>[Language] "..."</d>`、镜头术语表 (含振幅/速度)、屏幕文字双引号规则。
+  - 五种模式各自的任务模板: T2VA / I2VA (首帧对齐) / FL2VA (首尾帧对齐 + 该模式专用的无尖括号规则) / L2VA (尾帧对齐) / Ref2VA (全参考角色/动作迁移, 定义 <Subject N> 标签, 风格句在 [Shot 1] 之前)。
+  - 无背景音乐 → 结尾 `Music: N/A`; 格式优先规则同步更新为新输出结构。
+  - 旧字段 (integrated_multimodal_description / overall_soundscape / non_diegetic_music / 六段式) 相关的输出格式表已移除。
+
 #### v1.5.3
 - **修复优化输出不遵循 skill 格式的问题**: 用户提示词只是**内容引导**, 输出结构必须严格按所选生成模式的 skill 规范。新增 `[Output Format Rule]` (格式优先规则): 即使用户引导词里自带格式要求 (镜头列表/时间戳样式/段落标题等), 也绝不照搬为输出骨架, 用户的内容要求 (镜头运动/色调/光线/景别/时长等) 一律重组进 skill 要求的字段; Ref2VA 强制六段式 (subject_definitions/summary/retention_analysis/detailed_description/overall_soundscape/non_diegetic_music), 其它 H3 模式强制三字段; 禁止 "Based on the provided images..." 之类前言。
 

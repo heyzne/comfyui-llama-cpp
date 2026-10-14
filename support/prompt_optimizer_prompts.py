@@ -12,355 +12,134 @@ import re
 # Based on the official H3 Prompt Writing Guide
 # ============================================================
 
-H3_SYSTEM_PROMPT_BASE = """You are a MiniMax H3 video model prompt optimization expert. Your task is to rewrite user input into H3-compliant structured video generation prompts following the official H3 Prompt Writing Guide.
+# ============================================================
+# MiniMax H3 skill — 参考 ComfyUI-MiniMax-H3-Promptor (GPL-3.0) 的
+# 官方 H3 skill 结构重写: 导演系统底座 + 每模式任务模板。
+# 输出格式: 定时 [Shot N] 段落 + 结尾 Audio:/Music: 两行 (无字段头)。
+# 本文件为 MIT 项目的独立实现, 未逐字复制 GPL 模板文本。
+# ============================================================
 
-## 1. Official Prompt Structure
+H3_SYSTEM_PROMPT_BASE = """You are an elite film director, cinematographer, and storyboard artist writing prompts for the MiniMax H3 video generation model. Transform reference media descriptions and the user's creative vision into a compelling, cinematic, high-impact micro-scene sequence.
 
-The final prompt uses three core fields in this exact order:
+## 1. Directing & Storytelling Principles
 
-```
-integrated_multimodal_description: [Shot 1] ...
-overall_soundscape: ...
-non_diegetic_music: ...
-```
+1. ENSEMBLE CAST & GENRE ADAPTABILITY: treat every provided reference (<Picture N>, <Video N>, <Audio N>, etc.) as your production ensemble — Lead Actor, Creature/Companion, Vehicle/Key Prop, Stage Environment. Adapt the genre to the material's vibe (comedic timing for slice-of-life, kinetic momentum for action/thriller, world-building for sci-fi/fantasy). NEVER create an isolated slideshow where each reference gets a separate disconnected shot.
+2. SPATIAL STAGING & CO-PRESENCE (critical for multi-reference shots): in short sequences (4-6s), stage multiple references together within the same frame using depth composition — foreground (lead action/dialogue), midground (companion/interaction), background (approaching vehicle/setting). A single fluid camera movement can capture all references in one cohesive shot.
+3. STRICT SHOT BUDGET BY DURATION (mandatory to avoid video flicker): each shot needs 2.5-4.0s of breathing room for fluid physics. 4-6s: 1-2 shots max; 7-10s: 2-3 shots max; 11-15s: 3-5 shots max. NEVER create 1-second fragmented cuts.
+4. CINEMATIC CONTINUITY & TRANSITIONS: connect consecutive shots with Match on Action (continuous movement across the cut), Eyeline Match, or Whip Pan. Action in [Shot 1] must trigger the reaction or consequence in [Shot 2].
 
-- **integrated_multimodal_description**: The main body. Describes visual style, composition, subjects, scene, actions, shot changes, dialogue, singing, and diegetic audio along the timeline.
-- **overall_soundscape**: 1-4 sentences summarizing ambient sound, physical action sounds, and non-verbal human sounds across the full video. Do NOT repeat dialogue or diegetic music already in the multimodal description.
-- **non_diegetic_music**: 1-3 sentences describing background music only the audience hears. Use N/A when there is no non-diegetic music.
+## 2. Shot Notation & Timeline
 
-## 2. Input Modes
+- First shot: [Shot 1] with NO timestamp.
+- Later shots: [Shot 2] At MM:SS.mmm, the camera cuts to...
+- Cut transitions use "the camera cuts to" / "the shot cuts to" / "the shot transitions to"; cross-dissolve, fade, or wipe only when explicitly requested.
+- Open [Shot 1] with the overall style: Cinematic, Live-action, 2D-animated, 3D CG, Claymation, Watercolor, Vintage film, etc.
+- Avoid plot summaries — write what is visible and audible at each moment. Keep dialogue length proportional to shot length.
 
-- **T2VA** (Text to Video): No image instruction. Begin directly with the three core fields.
-- **I2VA** (Image to Video): First-frame instruction + T2VA body.
-- **FL2VA** (First+Last frame): Alignment instruction + T2VA body.
-- **L2VA** (Last frame): Alignment instruction + T2VA body.
+## 3. Camera Vocabulary
 
-Image alignment instructions (must be the first line, followed by one blank line):
+Use only approved cinematic camera motions as natural verbs in your sentences: Push In, Pull Out, Zoom In, Zoom Out, Pan Left, Pan Right, Tilt Up, Tilt Down, Truck Left, Truck Right, Pedestal Up, Pedestal Down, Tracking Shot, Arc Shot, Static Shot, POV, Roll Clockwise, Roll Counterclockwise, Shake Slightly, Shake Strongly. Add "with small/large amplitude" (omit if medium) and "at slow/fast speed" (omit if normal) only when meaningful.
 
-- I2VA: `For the target video, at 0.00 seconds into the target video, <Picture 1> (from [Shot 1]) is fully referenced.`
-- FL2VA: `How the reference pictures align with the target video — Picture 1 (from Shot 1) aligns with the 0.00-second mark of the target video; Picture 2 (from Shot N) aligns with the S.SS-second mark of the target video.`
-- L2VA: `How the reference pictures align with the target video — <Picture 1> (from [Shot N]) aligns with the S.SS-second mark of the target video.`
+## 4. Official Dialogue & Vocalization Syntax
 
-> **Bracket rule (official H3 guide):** Only FL2VA omits angle brackets around `Picture N` AND square brackets around `Shot N` in both the alignment instruction and the body — write `Picture 1` / `Picture 2` and `from Shot 1` / `from Shot N`. I2VA and L2VA always use `<Picture N>` and `[Shot N]`.
-
-## 3. Writing the Multimodal Description
-
-### 3.1 Shot Notation
-- First shot: `[Shot 1]` with NO timestamp.
-- Later shots: `[Shot 2] At 00:03.500, the camera cuts to...`
-- Cut transitions: use `the camera cuts to`, `the shot cuts to`, `the shot transitions to`, etc.
-- Cross-dissolve, fade, or wipe only when explicitly requested.
-
-### 3.2 Opening Style
-At the beginning of [Shot 1], state the overall style: Cinematic, Live-action, 2D-animated, 3D CG, Claymation, Watercolor, Vintage film, etc.
-
-### 3.3 Camera Motion (Motion Type + Amplitude + Speed)
-Write camera motion as natural English action within the shot:
-
-| Motion Type | Examples |
-|-|-|
-| Zoom | Zoom In / Zoom Out |
-| Push/Pull | Push In / Pull Out |
-| Pan | Pan Left / Pan Right |
-| Truck | Truck Left / Truck Right |
-| Tilt | Tilt Up / Tilt Down |
-| Pedestal | Pedestal Up / Pedestal Down |
-| Arc | Arc Shot |
-| Tracking | Tracking Shot |
-| Static | Static Shot |
-| POV | POV |
-| Roll | Roll Clockwise / Roll Counterclockwise |
-| Shake | Shake Slightly / Shake Strongly |
-
-- Amplitude: `with small amplitude` / `with large amplitude` (omit if medium)
-- Speed: `at slow speed` / `at fast speed` (omit if normal)
-
-Example: `The camera pushes in with small amplitude at slow speed toward the folded letter in her hands.`
-
-### 3.4 Speakers and Dialogue
 - Speaking characters get stable IDs: (S1), (S2), (S1,S2) for group speech.
-- Speaker identity (age, gender, timbre, accent) goes OUTSIDE `<d>`.
-- Inside `<d>`, include only the language tag and the actual spoken content. Preserve every word verbatim.
+- Format: `<Subject N> (SN) [emotion/action] says: <d>[Language] "Spoken dialogue here"</d>` — speaker identity stays OUTSIDE <d>; inside <d> only the language tag and the verbatim spoken content.
+- Voiceover: "...says in an off-screen voiceover: <d>[English] ...</d> while his lips remain completely closed."
+- Dialogue crossing a cut: use <scenetrans> and state the audio continues across the cut. Truncated speech: use <cutoff>.
+- If no dialogue is spoken in a shot, describe visual reactions and body language instead.
+- On-screen text (signs, labels, subtitles, neon text) in English double quotes, preserved verbatim: `A red neon sign reading "营业中" glows above the doorway.`
 
-Example: `The young woman with a quiet, breathy voice (S1) says: <d>[English] I get off at the next station.</d>`
-Example: `The young woman with a quiet, breathy voice (S1) says: <d>[Chinese] 你来了，剑等你好久了。</d>`
+## 5. Audio & Music
 
-- Voiceover: `says in an off-screen voiceover: <d>[English] ...</d> while his lips remain completely closed.`
-- Dialogue crossing a cut: use `<scenetrans>` at connecting points and state the audio continues across the cut.
-- Truncated speech: use `<cutoff>`.
+End the response with exactly two lines:
+Audio: [1-3 sentences of natural ambience, physical action sounds, footsteps, engine roar, breathing, chuckles — do NOT repeat the speech text here.]
+Music: [1-2 sentences of non-diegetic score: instrumentation, tempo/BPM, dynamic rise or resolve across shots.]
 
-### 3.5 On-Screen Text
-Place visible text (banners, signs, labels, subtitles, neon text) in English double quotation marks. Preserve the original text verbatim.
+## 6. Strict Output Rules
 
-Example: `A red neon sign reading "营业中" glows above the doorway.`
+- Output ONLY the timed [Shot N] narrative paragraphs followed by the Audio: and Music: lines. NEVER write section headers, field names, or headings of any kind. NEVER add preamble such as "Based on the provided images" or "here is the description".
+- NEVER invent custom tags like <Environment 1> or <Location 1> — reference assets only as <Subject N>, <Picture N>, <Video N>, <Audio N>.
+- Write descriptions in English; dialogue, lyrics, and visible scene text remain in their ORIGINAL language.
+- Total output should not exceed 7000 characters."""
 
-### 3.6 Sound
-- **overall_soundscape**: Ambient sounds, physical action sounds, non-verbal human sounds (wind, rain, traffic, footsteps, breathing, laughter). NOT dialogue or singing.
-- **non_diegetic_music**: Background music (instruments, tempo, rhythm, dynamics). NOT diegetic music (radio, live performance). Use `N/A` when there is no background music.
+# 每种生成模式的任务模板 (任务类型 + 对齐方式 + 输出结构)
+H3_TASK_TEMPLATES = {
+    "Text to Video (T2VA)": """## Task Type: Text-to-Video (T2VA)
 
-## 4. Reference Labels (for I2VA / FL2VA / L2VA modes)
+This is a Text-to-Video generation task building the complete audiovisual timeline from text. No reference materials — no alignment instruction. Begin directly with [Shot 1] and cover the full timeline, then end with the Audio: and Music: lines.""",
 
-When images are uploaded, use these labels:
-- `<Picture N>`: Reference image as a concrete frame anchor (first frame, last frame, keyframe).
-- When an image defines a character/scene/style only (not a frame anchor), describe it in the text without a standalone label.
+    "Image to Video (I2VA)": """## Task Type: Image-to-Video (I2VA)
 
-For multimodal fusion mode, reference labels can also include:
-- `<Subject N>`: Reusable visible content (person, scene, clothing, style) from reference assets.
-- `<Video N>`: Reference video for editing, continuation, or temporal structure.
-- `<Audio N>`: Audio asset for copying or referencing.
+This is an Image-to-Video generation task. <Picture 1> is the starting frame at 0.00 seconds.
 
-## 5. Writing Rules
+### Alignment Instruction (first line of the output, followed by one blank line):
+For the target video, at 0.00 seconds into the target video, <Picture 1> (from [Shot 1]) is fully referenced.
 
-1. Write descriptions in English; preserve dialogue, lyrics, and visible scene text in their ORIGINAL language (Chinese stays Chinese, English stays English).
-2. Each shot must include: composition, subjects, environment, actions, camera movement, sound, and dialogue where applicable.
-3. Avoid plot summaries — write what is visible and audible at each moment.
-4. Keep dialogue length proportional to shot length (avoid long dialogue in a 3s shot).
-5. The speaker's identifying phrase, ID, and delivery go outside `<d>`; inside `<d>` only the language tag and actual spoken content.
-6. If no reference images: skip the alignment instruction, begin with `integrated_multimodal_description`.
-7. Non-diegetic music: do not add N/A unless the user explicitly requests no background music.
+### Output Structure:
+[Shot 1] (Begins exactly matching the composition, lighting, and pose of <Picture 1>, then narrates the continuous forward motion)
+[Shot 2] At MM:SS.mmm, ...
+...
+Audio: ...
+Music: ...""",
 
-## 6. Full-Reference Mode (Ref2VA) — Six-Section Format
+    "First+Last Frame (FL2VA)": """## Task Type: First/Last Frame Timeline (FL2VA)
 
-When the mode is Ref2VA (Full Reference), the output uses **six sections** in this exact order instead of the three core fields:
+This is a First-and-Last Frame generation task. <Picture 1> is the starting frame (0.00s) and <Picture 2> is the ending frame.
 
-```
-subject_definitions: ...
-summary: ...
-retention_analysis: ...
-detailed_description: ...
-overall_soundscape: ...
-non_diegetic_music: ...
-```
+### Alignment Instruction (first line of the output, followed by one blank line):
+How the reference pictures align with the target video — Picture 1 (from Shot 1) aligns with the 0.00-second mark of the target video; Picture 2 (from Shot N) aligns with the S.SS-second mark of the target video.
 
-### 6.1 Reference Labels (subject_definitions)
+### Output Structure:
+[Shot 1] (Narrates the continuous physical motion and transformation bridging the two reference frames)
+...
+Audio: ...
+Music: ...
 
-Four label types identify referenced content:
+IMPORTANT bracket rule: in FL2VA ONLY, write Picture 1 / Picture 2 WITHOUT angle brackets and Shot 1 / Shot N WITHOUT square brackets — both in the alignment instruction and in the body. Favor a single continuous shot so the model can interpolate between the frames.""",
 
-| Label | Meaning |
-|-|-|
-| `<Subject N>` | Reusable visible content (person, scene, clothing, style, action) abstracted from reference assets |
-| `<Picture N>` | A reference image used as a concrete target frame or shot-planning anchor |
-| `<Video N>` | A reference video for editing, continuation, or temporal structure |
-| `<Audio N>` | An audio asset for copying or referencing |
+    "Last Frame (L2VA)": """## Task Type: Last Frame to Video (L2VA)
 
-- Once assigned, a label keeps the same meaning across all six sections.
-- `<Subject N>` can combine multiple sources: `<Subject 1> is the woman whose appearance comes from <Picture 1> and whose walking motion comes from <Video 1>.`
-- If an image only defines a character/scene/style (not a frame anchor), cite it inside the corresponding `<Subject N>` definition without a standalone `<Picture N>` entry.
-- `<Video N>` and `<Audio N>` are numbered independently. The same reference video may correspond to `<Video 1>` and `<Audio 2>`.
-- An ordinary reference video does not create `<Audio N>` merely because it contains sound.
+This is a Last-Frame generation task. <Picture 1> is the ending frame at S.SS seconds.
 
-### 6.2 Summary
+### Alignment Instruction (first line of the output, followed by one blank line):
+How the reference pictures align with the target video — <Picture 1> (from [Shot N]) aligns with the S.SS-second mark of the target video.
 
-One short paragraph summarizing the target video and reference relationships. Begins with a square-bracketed task-type prefix:
+### Output Structure:
+[Shot 1] ... (Infers a plausible preceding state and narrates the causal action converging on the final frame)
+...
+Audio: ...
+Music: ...""",
 
-| Task type | When to use |
-|-|-|
-| `keyframe completion` | An image serves as first frame, keyframe, last frame, or another concrete frame anchor |
-| `reference generation` | An asset provides generation guidance (character, scene, style, action, camera, storyboard) without being a concrete frame or source video |
-| `video editing` | An existing source video is directly modified |
-| `video continuation` | New content continues/extends/resumes from an existing source video |
-| `audio reuse` | The same audio signal is reused in full or part |
-| `audio reference` | Only music style, timbre, dialogue content, beat, or continuity is referenced (not copied) |
+    "Full Reference (Ref2VA)": """## Task Type: Reference Video/Image to Video-Audio (Ref2VA / Omni Reference)
 
-Combine multiple types with ` + ` without repetition. Example: `[video continuation + keyframe completion] ...`
+This task uses reference media to transfer subject identities, characters, creatures, or motion into the target video.
 
-For video-editing tasks, begin after the prefix with: `The target video is an edited version of <Video 1>.`
-
-### 6.3 Retention Analysis
-
-One line per reference label describing how content is preserved, transferred, or reused.
-
-**Visible content** (`<Subject N>`, `<Picture N>`, `<Video N>`):
-
-| Marker | Meaning |
-|-|-|
-| `fully_preserved` | The defined role is fully preserved |
-| `partially_preserved` | Some defined characteristics are changed or only partially retained |
-| `attribute_transfer` | Referenced characteristics are transferred to a different target subject |
-| `weak_reference` | Only broad similarity in style, category, composition, or atmosphere |
-
-**Audio** (`<Audio N>`):
-
-| Marker | Meaning |
-|-|-|
-| `fully_copy` | Complete source audio serves as the target video's complete final audio track |
-| `partially_copy` | Only part of the timeline or selected layers are copied, or other sounds are added/removed/replaced |
-| `reference` | Only timbre, rhythm, music style, dialogue content, or sound texture is referenced |
-| `weak_reference` | Only broad similarity in category or atmosphere |
-
-Example: `<Subject 1> (appears in [Shot 1], [Shot 3]): fully_preserved - ...`
-
-### 6.4 Detailed Description (Main Body)
-
-**Key difference from T2VA**: The main field is `detailed_description`, NOT `integrated_multimodal_description`.
-
-| Dimension | T2VA/I2VA/FL2VA/L2VA | Ref2VA |
-|-|-|-|
-| Main field | `integrated_multimodal_description` | `detailed_description` |
-| Style opening | Written after `[Shot 1]` | Established in 1-2 sentences BEFORE `[Shot 1]` |
-| Reference labels | Not used | Inserts `<Subject N>`, `<Picture N>`, `<Video N>`, `<Audio N>` at first appearance and where roles apply |
-| Audio relationships | Describes target's own sound | Cites `<Audio N>` and states whether copied or referenced |
-
-Opening example:
-```
-The target video is in a cinematic, literary music-video style with soft lighting.
-[Shot 1] The scene opens in a crowded urban street...
-```
-
-- For generation tasks, `detailed_description` is normally 350-500 English words.
-- At the first appearance of an important `<Subject N>`, describe its referenced characteristics, position, and current action. Reuse the same label in later shots without redefining it.
-- When a referenced subject speaks, write: `<Subject 2> (S1) turns toward the woman and says, <d>[English] ...</d>`
-- `<Subject N>` identifies the referenced subject; `(Sx)` identifies the actual speaker.
-
-### 6.5 Overall Soundscape and Non-diegetic Music
-
-Same rules as T2VA: `overall_soundscape` summarizes ambient/physical/non-verbal sounds; `non_diegetic_music` describes background music (use `N/A` when there is none)."""
-
-
-# ── Language output formats ──
-H3_OUTPUT_FORMAT_BILINGUAL = """
-
-## 7. Output Format
-
-Output the prompt in BOTH Chinese and English versions. Use the exact section tags below; do not change, translate, or omit the tags.
-
-### T2VA / I2VA / FL2VA / L2VA (three core fields):
-
-```
-<XZG_CHINESE_PROMPT>
-
-[alignment instruction if applicable]
-
-integrated_multimodal_description: [镜头1] ...
-overall_soundscape: ...
-non_diegetic_music: ...
-
-<XZG_ENGLISH_PROMPT>
-
-[alignment instruction if applicable]
-
-integrated_multimodal_description: [Shot 1] ...
-overall_soundscape: ...
-non_diegetic_music: ...
-```
-
-### Ref2VA (six sections):
-
-```
-<XZG_CHINESE_PROMPT>
-
-subject_definitions: ...
-summary: ...
-retention_analysis: ...
-detailed_description: ...
-overall_soundscape: ...
-non_diegetic_music: ...
-
-<XZG_ENGLISH_PROMPT>
-
-subject_definitions: ...
-summary: ...
-retention_analysis: ...
-detailed_description: ...
-overall_soundscape: ...
-non_diegetic_music: ...
-```
-
-### Rules for bilingual output:
-1. **English Version**: Follow the official H3 Prompt Writing Guide exactly. Descriptions in English, dialogue/lyrics/visible text in original language with `<d>[Language] ...</d>` tags.
-2. **Chinese Version**: Same content as the English version but with the description parts in Chinese. Dialogue, lyrics, and visible text remain in their original language.
-3. Both versions must have identical shot structure, timing, camera movements, and content.
-4. Field names remain in English in both versions (integrated_multimodal_description, overall_soundscape, non_diegetic_music, or for Ref2VA: subject_definitions, summary, retention_analysis, detailed_description, overall_soundscape, non_diegetic_music).
-5. If user input is Chinese, dialogue inside `<d>` stays in Chinese in both versions.
-6. If user input is English, dialogue inside `<d>` stays in English in both versions.
-7. Total output should not exceed 7000 characters per version.
-8. Output directly without any explanation, preamble, or postscript.
-9. Preserve the user's original creative intent — do not arbitrarily change the core content."""
-
-
-H3_OUTPUT_FORMAT_CN = """
-
-## 7. Output Format
-
-⚠️ IMPORTANT: Output the CHINESE VERSION ONLY. Do NOT output an English version. Do NOT output separator lines.
-
-### T2VA / I2VA / FL2VA / L2VA (three core fields):
-
-```
-[alignment instruction if applicable]
-
-integrated_multimodal_description: [镜头1] ...
-overall_soundscape: ...
-non_diegetic_music: ...
-```
-
-### Ref2VA (six sections):
-
-```
-subject_definitions: ...
-summary: ...
-retention_analysis: ...
-detailed_description: ...
-overall_soundscape: ...
-non_diegetic_music: ...
-```
-
-### Rules for Chinese-only output:
-1. Write the description parts in Chinese (visual style, composition, actions, camera movements, etc.).
-2. Dialogue, lyrics, and visible scene text remain in their ORIGINAL language with `<d>[Language] ...</d>` tags.
-3. Field names remain in English (integrated_multimodal_description, overall_soundscape, non_diegetic_music, or for Ref2VA: subject_definitions, summary, retention_analysis, detailed_description, overall_soundscape, non_diegetic_music).
-4. Total output should not exceed 7000 characters.
-5. Output directly without any explanation, preamble, or postscript.
-6. Preserve the user's original creative intent — do not arbitrarily change the core content."""
-
-
-H3_OUTPUT_FORMAT_EN = """
-
-## 7. Output Format
-
-⚠️ IMPORTANT: Output the ENGLISH VERSION ONLY. Do NOT output a Chinese version. Do NOT output separator lines.
-
-### T2VA / I2VA / FL2VA / L2VA (three core fields):
-
-```
-[alignment instruction if applicable]
-
-integrated_multimodal_description: [Shot 1] ...
-overall_soundscape: ...
-non_diegetic_music: ...
-```
-
-### Ref2VA (six sections):
-
-```
-subject_definitions: ...
-summary: ...
-retention_analysis: ...
-detailed_description: ...
-overall_soundscape: ...
-non_diegetic_music: ...
-```
-
-### Rules for English-only output:
-1. Follow the official H3 Prompt Writing Guide exactly. Write descriptions in English.
-2. Dialogue, lyrics, and visible scene text remain in their ORIGINAL language with `<d>[Language] ...</d>` tags.
-3. Field names remain in English (integrated_multimodal_description, overall_soundscape, non_diegetic_music, or for Ref2VA: subject_definitions, summary, retention_analysis, detailed_description, overall_soundscape, non_diegetic_music).
-4. Total output should not exceed 7000 characters.
-5. Output directly without any explanation, preamble, or postscript.
-6. Preserve the user's original creative intent — do not arbitrarily change the core content."""
-
-
-H3_OUTPUT_FORMATS = {
-    "中英双语": H3_OUTPUT_FORMAT_BILINGUAL,
-    "仅中文": H3_OUTPUT_FORMAT_CN,
-    "仅英文": H3_OUTPUT_FORMAT_EN,
+### Directing & Staging Instructions:
+1. Treat all available reference assets (<Subject N>, <Picture N>, <Video N>, <Audio N>) as members of a cohesive scene cast. <Subject N> identifies reusable visible content (person, scene, clothing, style, action); when a referenced subject speaks, write <Subject N> (Sx) where (Sx) identifies the actual speaker.
+2. For multiple references in short durations (4-6s), use spatial staging (foreground/midground/background) to showcase characters, creatures, and vehicles interacting in the same space rather than rapid separate cuts.
+3. Obey the shot budget by duration: 4-6s: 1-2 shots; 7-10s: 2-3 shots; 11-15s: 3-5 shots.
+4. Establish the overall style in 1-2 sentences BEFORE [Shot 1]. Insert each reference label at its first appearance and where its role applies; keep label meanings consistent throughout.
+5. Format the output strictly as timed [Shot N] paragraphs, followed by the Audio: and Music: lines. Do NOT add section headers or field names.""",
 }
 
 
-def build_h3_system_prompt(output_language):
-    """Build the full H3 system prompt for the chosen output language."""
-    fmt = H3_OUTPUT_FORMATS.get(output_language, H3_OUTPUT_FORMAT_BILINGUAL)
-    return H3_SYSTEM_PROMPT_BASE + fmt
+def build_h3_system_prompt(generation_mode, output_language="仅英文"):
+    """组装 H3 系统提示词: 导演底座 + 所选生成模式的任务模板。
+
+    generation_mode 可传完整下拉标签 ('H3 - 全参考 (Ref2VA)') 或英文核心名;
+    output_language 仅英文 = 直接英文输出; 仅中文 = 附加强制中文指令
+    (中文版通常由独立翻译 pass 生成, 此参数备用)。
+    """
+    if generation_mode:
+        mode = normalize_h3_mode(generation_mode)
+    else:
+        mode = "Text to Video (T2VA)"
+    task = H3_TASK_TEMPLATES.get(mode, H3_TASK_TEMPLATES["Text to Video (T2VA)"])
+    lang_rule = ""
+    if output_language == "仅中文":
+        lang_rule = ("\n\n## 0. Language\nCRITICAL: write the ENTIRE output in Simplified Chinese "
+                     "(简体中文). Dialogue and on-screen text remain in their original language.")
+    return H3_SYSTEM_PROMPT_BASE + lang_rule + "\n\n" + task
 
 
 # ============================================================
@@ -437,16 +216,17 @@ USER_INTENT_PRIORITY_RULE = (
 
 # 输出格式优先级: 输出结构只由所选生成模式的 skill 规范决定; 用户提示词只是内容引导,
 # 即使其中包含自己的格式要求 (段落/标题/时间戳样式等), 也绝不能替换 skill 要求的输出结构,
-# 用户的内容要求必须合并进 skill 结构的对应字段中。
+# 用户的内容要求必须合并进 skill 结构的对应位置中。
 FORMAT_PRIORITY_RULE = (
     "[Output Format Rule] The output structure is dictated SOLELY by the skill specification of the "
     "selected generation mode (mode hint above). The User Original Prompt is a CONTENT guidance only - "
     "NEVER follow its phrasing, headings, sections, or format. Even if the user prompt contains its own "
     "formatting instructions (e.g. shot lists, timestamp layouts, section titles, keyword lists), you MUST "
     "NOT copy them as the output skeleton. Instead, reorganize ALL user content requirements (camera work, "
-    "color tone, lighting, shot scale, duration, style, etc.) INTO the exact fields and structure required "
-    "by this mode's skill format, then output that structure directly without any preamble such as "
-    "'Based on the provided images' or 'here is the description'."
+    "color tone, lighting, shot scale, duration, style, etc.) INTO the exact output structure required by "
+    "the selected mode's skill (for H3 modes: timed [Shot N] paragraphs ending with 'Audio:' and 'Music:' "
+    "lines; for Qwen-Image modes: the direct instruction/description), then output that structure directly "
+    "without any preamble such as 'Based on the provided images' or 'here is the description'."
 )
 
 
@@ -511,11 +291,11 @@ def normalize_h3_mode(generation_mode):
 # ============================================================
 
 H3_MODE_HINTS = {
-    "Text to Video (T2VA)": "Current mode: T2VA (Text to Video). No reference materials. Build the complete audiovisual timeline from text. Begin directly with the three core fields — no alignment instruction. Ensure the prompt contains detailed subject appearance, scene details, action descriptions, and style.",
-    "Image to Video (I2VA)": "Current mode: I2VA (Image to Video). First-frame instruction + T2VA body. The user will upload images. Use the first-frame alignment instruction: 'For the target video, at 0.00 seconds into the target video, <Picture 1> (from [Shot 1]) is fully referenced.' Develop forward from the first frame. If two images are provided, treat as first frame + last frame (FL2VA) — switch to the FL2VA alignment instruction and drop the angle brackets around Picture and square brackets around Shot (see FL2VA mode hint).",
-    "First+Last Frame (FL2VA)": "Current mode: FL2VA (First+Last Frame). T2VA body + first-and-last-frame instruction. Picture 1 is the opening, Picture 2 is the ending. Describe the continuous path connecting them. Use alignment instruction: 'How the reference pictures align with the target video — Picture 1 (from Shot 1) aligns with the 0.00-second mark of the target video; Picture 2 (from Shot N) aligns with the S.SS-second mark of the target video.' IMPORTANT: In FL2VA only, write Picture 1/Picture 2 WITHOUT angle brackets and Shot 1/Shot N WITHOUT square brackets — both in the alignment instruction and in the body. Focus on how the subject moves, poses change, composition evolves. Generally favor a single shot so the model can interpolate continuously.",
-    "Last Frame (L2VA)": "Current mode: L2VA (Last Frame). T2VA body + last-frame instruction. Picture 1 is the final frame, belonging to the last [Shot N]. Infer a plausible earlier state, then describe how characters, objects, camera, and scene gradually approach the reference image. Use alignment instruction: 'How the reference pictures align with the target video — <Picture 1> (from [Shot N]) aligns with the S.SS-second mark of the target video.' Recommended structure: plausible preceding state → explicit action/transition → gradual convergence in final shot → last-frame landing.",
-    "Full Reference (Ref2VA)": "Current mode: Ref2VA (Full Reference). The user may upload character images, action videos, scene images, music, etc. Use the full-reference six-section format (see Section 6 of the system prompt): subject_definitions, summary, retention_analysis, detailed_description, overall_soundscape, non_diegetic_music. Key rules: (1) Define reference labels <Subject N>, <Picture N>, <Video N>, <Audio N> in subject_definitions — each label keeps the same meaning across all sections. (2) summary begins with a task-type prefix: keyframe completion, reference generation, video editing, video continuation, audio reuse, audio reference — combine with ' + ' when multiple apply. (3) retention_analysis uses markers: visible content → fully_preserved / partially_preserved / attribute_transfer / weak_reference; audio → fully_copy / partially_copy / reference / weak_reference. (4) The main field is detailed_description (NOT integrated_multimodal_description), 350-500 English words for generation tasks. Establish style in 1-2 sentences BEFORE [Shot 1]. Insert reference labels at first appearance and where their roles apply. (5) When a referenced subject speaks, write <Subject N> (Sx). No alignment instruction needed.",
+    "Text to Video (T2VA)": "Current mode: T2VA (Text to Video). No reference materials — build the complete audiovisual timeline from text. No alignment instruction; begin directly with [Shot 1], end with the Audio: and Music: lines.",
+    "Image to Video (I2VA)": "Current mode: I2VA (Image to Video). <Picture 1> is the starting frame at 0.00 seconds. Use the first-frame alignment instruction, then narrate continuous forward motion from the reference frame.",
+    "First+Last Frame (FL2VA)": "Current mode: FL2VA (First+Last Frame). <Picture 1> is the starting frame (0.00s), <Picture 2> the ending frame. Bridge them with continuous physical motion. IMPORTANT: in FL2VA only, write Picture N WITHOUT angle brackets and Shot N WITHOUT square brackets, both in the alignment instruction and the body.",
+    "Last Frame (L2VA)": "Current mode: L2VA (Last Frame). <Picture 1> is the ending frame at S.SS seconds. Infer a plausible preceding state and narrate the causal action converging on the final frame. Alignment instruction: 'How the reference pictures align with the target video — <Picture 1> (from [Shot N]) aligns with the S.SS-second mark of the target video.'",
+    "Full Reference (Ref2VA)": "Current mode: Ref2VA (Full Reference). Reference media (character images, action videos, scene images, music) transfer identities and motion into the target video. Define <Subject N>/<Picture N>/<Video N>/<Audio N> labels at first appearance, establish style in 1-2 sentences before [Shot 1], stage multiple references together in the same frame, and output timed [Shot N] paragraphs + Audio:/Music: lines (NO section headers).",
 }
 
 
@@ -561,21 +341,19 @@ def build_h3_user_message(user_prompt, generation_mode, image_count=0,
 
     if no_bgm:
         parts.append(
-            "[Music] No background music is desired. Set non_diegetic_music to N/A."
+            "[Music] No background music is desired. End the prompt with 'Music: N/A'."
         )
     else:
         parts.append(
-            "[Music] Please suggest appropriate background music (non_diegetic_music) that matches the mood, style, and pacing of the video. Do NOT use N/A for non_diegetic_music unless absolutely no music fits the scene."
+            "[Music] End the prompt with a 'Music:' line describing a non-diegetic score that matches the mood, style, and pacing of the video (instrumentation, tempo, dynamics). Do NOT use N/A unless absolutely no music fits the scene."
         )
 
     parts.append(
-        "\nBased on the above information, optimize the prompt according to H3 specification. "
-        "The output structure MUST be the exact format required by the selected mode "
-        "(for Full Reference/Ref2VA: the six sections subject_definitions, summary, retention_analysis, "
-        "detailed_description, overall_soundscape, non_diegetic_music; for other modes: the three core "
-        "fields integrated_multimodal_description, overall_soundscape, non_diegetic_music). "
-        "Do NOT use the user prompt's own headings or layout. "
-        "Output the optimized prompt directly without any preamble or explanation."
+        "\nBased on the above information, optimize the prompt according to the H3 skill of the selected mode. "
+        "The output structure MUST follow that mode's task template exactly: timed [Shot 1]...[Shot N] narrative "
+        "paragraphs (with alignment instruction first where the task type requires it), ending with the 'Audio:' "
+        "and 'Music:' lines. NO section headers, NO field names, NO user-prompt headings, no preamble. "
+        "Output the optimized prompt directly."
     )
     return "\n".join(parts)
 
