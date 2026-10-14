@@ -21,6 +21,9 @@ python -m pip install -r ComfyUI-llama-cpp/requirements.txt
 
 ## 更新日志
 
+#### v1.5.3
+- **修复优化输出不遵循 skill 格式的问题**: 用户提示词只是**内容引导**, 输出结构必须严格按所选生成模式的 skill 规范。新增 `[Output Format Rule]` (格式优先规则): 即使用户引导词里自带格式要求 (镜头列表/时间戳样式/段落标题等), 也绝不照搬为输出骨架, 用户的内容要求 (镜头运动/色调/光线/景别/时长等) 一律重组进 skill 要求的字段; Ref2VA 强制六段式 (subject_definitions/summary/retention_analysis/detailed_description/overall_soundscape/non_diegetic_music), 其它 H3 模式强制三字段; 禁止 "Based on the provided images..." 之类前言。
+
 #### v1.5.2
 - **新增 `image + video` 推理模式**: 同时连接 video 口(视频帧序列) 与 images/image_N(独立参考图) 时使用。视频部分按 `max_frames` 均匀采样并做整体反推, 图片部分全部保留并逐张反推; 优化请求中参考标签自动对齐 (视频帧在前, 图片标签从其之后开始编号)。`video` 模式下若混接图片, 图片也不再被当作视频帧采样。
 

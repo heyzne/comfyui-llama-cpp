@@ -435,6 +435,20 @@ USER_INTENT_PRIORITY_RULE = (
     "scene, and style; they must NEVER override, replace, or omit the actions and content requested by the user."
 )
 
+# 输出格式优先级: 输出结构只由所选生成模式的 skill 规范决定; 用户提示词只是内容引导,
+# 即使其中包含自己的格式要求 (段落/标题/时间戳样式等), 也绝不能替换 skill 要求的输出结构,
+# 用户的内容要求必须合并进 skill 结构的对应字段中。
+FORMAT_PRIORITY_RULE = (
+    "[Output Format Rule] The output structure is dictated SOLELY by the skill specification of the "
+    "selected generation mode (mode hint above). The User Original Prompt is a CONTENT guidance only - "
+    "NEVER follow its phrasing, headings, sections, or format. Even if the user prompt contains its own "
+    "formatting instructions (e.g. shot lists, timestamp layouts, section titles, keyword lists), you MUST "
+    "NOT copy them as the output skeleton. Instead, reorganize ALL user content requirements (camera work, "
+    "color tone, lighting, shot scale, duration, style, etc.) INTO the exact fields and structure required "
+    "by this mode's skill format, then output that structure directly without any preamble such as "
+    "'Based on the provided images' or 'here is the description'."
+)
+
 
 def build_qwen_image_system_prompt(generation_mode, output_language):
     """Build the Qwen-Image-2.1 monolingual system prompt; call twice for bilingual."""
@@ -525,6 +539,7 @@ def build_h3_user_message(user_prompt, generation_mode, image_count=0,
     if prompt_text:
         parts.append(f"[User Original Prompt]\n{prompt_text}")
         parts.append(USER_INTENT_PRIORITY_RULE)
+        parts.append(FORMAT_PRIORITY_RULE)
     else:
         parts.append("[User Original Prompt]\nNo text prompt was provided. Follow the selected mode and use any attached reference images as context.")
 
@@ -555,7 +570,12 @@ def build_h3_user_message(user_prompt, generation_mode, image_count=0,
 
     parts.append(
         "\nBased on the above information, optimize the prompt according to H3 specification. "
-        "Output the optimized prompt directly without any explanation."
+        "The output structure MUST be the exact format required by the selected mode "
+        "(for Full Reference/Ref2VA: the six sections subject_definitions, summary, retention_analysis, "
+        "detailed_description, overall_soundscape, non_diegetic_music; for other modes: the three core "
+        "fields integrated_multimodal_description, overall_soundscape, non_diegetic_music). "
+        "Do NOT use the user prompt's own headings or layout. "
+        "Output the optimized prompt directly without any preamble or explanation."
     )
     return "\n".join(parts)
 
@@ -630,6 +650,7 @@ def build_qwen_image_user_message(user_prompt, generation_mode, image_count=0,
     if prompt_text:
         parts.append(f"[User Original Prompt]\n{prompt_text}")
         parts.append(USER_INTENT_PRIORITY_RULE)
+        parts.append(FORMAT_PRIORITY_RULE)
     else:
         parts.append("[User Original Prompt]\nNo text prompt was provided. Follow the selected prompt rules and use any attached reference images as context.")
 
@@ -644,7 +665,7 @@ def build_qwen_image_user_message(user_prompt, generation_mode, image_count=0,
             + "If the user prompt refers to images by ordinal names such as \"图1/图2\", \"图片1\", or \"image 1\", "
             "map them in order to the standard tags <image1>, <image2>, ... and use ONLY these standard tags in the output."
         )
-    parts.append("Output the optimized prompt directly without any explanation.")
+    parts.append("Output the optimized prompt directly: the structure MUST be the direct edit instruction / image description required by this Qwen-Image-2.1 mode, NOT the user prompt's own headings or layout. No preamble or explanation.")
     return "\n".join(parts)
 
 
