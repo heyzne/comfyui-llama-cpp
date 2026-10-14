@@ -423,6 +423,61 @@ def _candidate_sizes(fit_size):
     return _OPT_IMAGE_SIZES[idx:]
 
 
+def _is_context_error(err):
+    """判断是否为上下文/KV cache 溢出类错误 (Qwen 系禁用 context shift, 直接抛错)。"""
+    s = str(err).lower()
+    return (
+        ("context" in s and ("limit" in s or "exceed" in s or "shift" in s))
+        or "n_ctx" in s
+        or "failed completely even with batch size 1" in s
+    )
+
+
+def _messages_text(messages):
+    """提取消息列表中的全部文本, 用于 token 估算。"""
+    parts = []
+    for m in messages or []:
+        c = m.get("content")
+        if isinstance(c, str):
+            parts.append(c)
+        elif isinstance(c, list):
+            parts.extend(p.get("text", "") for p in c if isinstance(p, dict))
+    return "".join(parts)
+
+
+def _fit_max_tokens(n_ctx, prompt_tokens, max_tokens, floor=64):
+    """按剩余上下文收窄输出 token 上限, 避免生成阶段再次撑爆 KV cache。"""
+    if n_ctx <= 0:
+        return max_tokens
+    room = n_ctx - prompt_tokens - 32
+    if room >= max_tokens:
+        return max_tokens
+    return max(floor, room)
+
+
+def _chat_with_fallback(messages_builder, encode_images, n_images, text_tokens,
+                        n_ctx, reserve_tokens, seed, kwargs):
+    """按上下文预算逐级缩小图片边长重试; 全部失败则抛出最后一个错误。
+
+    messages_builder(uris) -> messages; encode_images(size, attempt) -> [data_uri]
+    """
+    llm = LLAMA_CPP_STORAGE.llm
+    last_err = None
+    for attempt, size in enumerate(_candidate_sizes(_fit_image_size(text_tokens, n_images, n_ctx, reserve_tokens))):
+        uris = encode_images(size, attempt) if n_images else []
+        try:
+            return llm.create_chat_completion(
+                messages=messages_builder(uris), seed=seed, **kwargs)
+        except RuntimeError as e:
+            if not _is_context_error(e):
+                raise
+            last_err = e
+            continue
+    if last_err is not None:
+        raise last_err
+    raise RuntimeError("Chat completion failed and no fallback attempt was made.")
+
+
 def parse_json(json_str):
     json_output = json_str.strip().removeprefix("```json").removesuffix("```")
     try:
@@ -792,7 +847,7 @@ class llama_cpp_instruct_adv:
                         opt_text = opt_output['choices'][0]['message']['content'].removeprefix(": ").strip()
                         break
                     except RuntimeError as e:
-                        if "context" not in str(e).lower() and "n_ctx" not in str(e).lower():
+                        if not _is_context_error(e):
                             raise
                         _last_err = e
                         continue
@@ -808,7 +863,7 @@ class llama_cpp_instruct_adv:
                             messages=build_messages(_sys_p, _user_p, [], _label), seed=seed, **_opt_kwargs)
                         opt_text = opt_output['choices'][0]['message']['content'].removeprefix(": ").strip()
                     except RuntimeError as e:
-                        if "context" in str(e).lower() or "n_ctx" in str(e).lower():
+                        if _is_context_error(e):
                             raise RuntimeError(
                                 f"Prompt optimizer failed: even the text-only request exceeds the model context "
                                 f"(n_ctx={_n_ctx}). Please increase n_ctx in the Llama-cpp Model Loader node, "
@@ -864,12 +919,29 @@ class llama_cpp_instruct_adv:
                 for i, image in enumerate(cqdm(frames)):
                     if mm.processing_interrupted():
                         raise mm.InterruptProcessingException()
-                    data = image2base64(np.clip(255.0 * image.cpu().numpy().squeeze(), 0, 255).astype(np.uint8))
-                    for item in user_content:
-                        if item.get("type") == "image_url":
-                            item["image_url"]["url"] = f"data:image/jpeg;base64,{data}"
-                            break
-                    output = LLAMA_CPP_STORAGE.llm.create_chat_completion(messages=messages, seed=seed, **_parameters)
+
+                    # 逐张推理: 同样按上下文预算选尺寸并收窄输出上限
+                    _est_one = _estimate_text_tokens(_messages_text(messages))
+                    _mt_one = int(_parameters.get("max_tokens", 1024) or 1024)
+                    _one_kwargs = dict(_parameters)
+                    _one_kwargs["max_tokens"] = _fit_max_tokens(_model_n_ctx(), _est_one, _mt_one)
+
+                    def _encode_one(size, attempt, _img=image):
+                        if attempt == 0:
+                            return [f"data:image/jpeg;base64,{image2base64(np.clip(255.0 * _img.cpu().numpy().squeeze(), 0, 255).astype(np.uint8))}"]
+                        return [f"data:image/jpeg;base64,{image2base64(scale_image(_img, size))}"]
+
+                    # 剔除原逻辑留下的空 URL 占位图, 只保留文本
+                    _base_one = [p for p in user_content if p.get("type") != "image_url"]
+
+                    def _build_one(uris, _base=_base_one):
+                        return messages[:-1] + [{"role": "user", "content": _base + [
+                            {"type": "image_url", "image_url": {"url": u}} for u in uris
+                        ]}]
+
+                    output = _chat_with_fallback(
+                        _build_one, _encode_one, 1, _est_one,
+                        _model_n_ctx(), _mt_one + 64, seed, _one_kwargs)
                     text = output['choices'][0]['message']['content'].removeprefix(": ").lstrip()
                     out2.append(text)
                     if len(frames) > 1:
@@ -878,24 +950,47 @@ class llama_cpp_instruct_adv:
                     
                 out1 = "\n\n".join(tmp_list)
             else:
-                for image in frames:
-                    if len(frames) > 1:
-                        data = image2base64(scale_image(image, max_size))
-                    else:
-                        data = image2base64(np.clip(255.0 * image.cpu().numpy().squeeze(), 0, 255).astype(np.uint8))
-                    image_content = {
-                        "type": "image_url",
-                        "image_url": {"url": f"data:image/jpeg;base64,{data}"}
-                    }
-                    user_content.append(image_content)
-                    
-                messages.append({"role": "user", "content": user_content})
-                output = LLAMA_CPP_STORAGE.llm.create_chat_completion(messages=messages, seed=seed, **_parameters)
+                # 主推理同样按上下文预算自适应: 先按估算选尺寸, 溢出时逐级缩小重试
+                _n_ctx_main = _model_n_ctx()
+                _est_main = _estimate_text_tokens(_messages_text(messages) + _messages_text([{"role": "user", "content": user_content}]))
+                _mt_main = int(_parameters.get("max_tokens", 1024) or 1024)
+                _main_kwargs = dict(_parameters)
+                _main_kwargs["max_tokens"] = _fit_max_tokens(_n_ctx_main, _est_main, _mt_main)
+
+                def _encode_main(size, attempt):
+                    out = []
+                    for image in frames:
+                        # 单图时首次沿用原逻辑(原始分辨率), 重试时才缩放
+                        if len(frames) > 1 or attempt > 0:
+                            out.append(f"data:image/jpeg;base64,{image2base64(scale_image(image, size))}")
+                        else:
+                            out.append(f"data:image/jpeg;base64,{image2base64(np.clip(255.0 * image.cpu().numpy().squeeze(), 0, 255).astype(np.uint8))}")
+                    return out
+
+                _user_msg = {"role": "user", "content": list(user_content)}
+                messages.append(_user_msg)
+
+                def _build_main(uris):
+                    _user_msg["content"] = list(user_content) + [
+                        {"type": "image_url", "image_url": {"url": u}} for u in uris
+                    ]
+                    return messages
+
+                output = _chat_with_fallback(
+                    _build_main, _encode_main, len(frames), _est_main,
+                    _n_ctx_main, _mt_main + 64, seed, _main_kwargs)
                 out1 = output['choices'][0]['message']['content'].removeprefix(": ").lstrip()
                 out2 = [out1]
         else:
+            _text_kwargs = dict(_parameters)
+            _mt_txt = int(_text_kwargs.get("max_tokens", 1024) or 1024)
+            _text_kwargs["max_tokens"] = _fit_max_tokens(
+                _model_n_ctx(),
+                _estimate_text_tokens(_messages_text(messages) + _messages_text([{"role": "user", "content": user_content}])),
+                _mt_txt,
+            )
             messages.append({"role": "user", "content": user_content})
-            output = LLAMA_CPP_STORAGE.llm.create_chat_completion(messages=messages, seed=seed, **_parameters)
+            output = LLAMA_CPP_STORAGE.llm.create_chat_completion(messages=messages, seed=seed, **_text_kwargs)
             out1 = output['choices'][0]['message']['content'].removeprefix(": ").lstrip()
             out2 = [out1]
             

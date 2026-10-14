@@ -21,6 +21,13 @@ python -m pip install -r ComfyUI-llama-cpp/requirements.txt
 
 ## 更新日志
 
+#### v1.4.6
+- **修复主推理 decode 溢出**: 解决 `Llama.eval(decode): Failed completely even with batch size 1.` (优化后长提示词 + 图片 + 输出 token 超出 n_ctx 导致 KV cache 写满)。
+  - 主推理 (含 `one by one` 逐张模式) 同样按上下文预算选择图片边长, 溢出时逐级缩小重试 (1024→768→512→384→256)。
+  - 新增**输出 token 预算收窄**: 按 `n_ctx - 提示词 - 余量` 自动降低 `max_tokens`, 避免生成阶段再次撑爆; 提示词不长时完全不改动。
+  - 错误识别统一: `Multimodal chunk exceeded context limit` 与 `Failed completely even with batch size 1` 都判定为上下文类, 才触发降级; 其他错误 (如显存不足) 照常抛出。
+  > 根本解法仍是调大 `Llama-cpp Model Loader` 的 `n_ctx` (多图 + Qwen 系建议 16384 以上), 降级只是保底。
+
 #### v1.4.5
 - **修复上下文溢出崩溃**: 解决 `Qwen35ChatHandler: Multimodal chunk exceeded context limit (n_ctx=8192)` 报错。提示词优化 pass 现按上下文预算自动选择参考图边长 (1024→768→512→384→256), 失败时逐级缩小重试; 仍放不下则退回纯文本优化 (保留反推描述); 单张反推失败会跳过而不中断整体流程。
   > 估算依据: 中日韩字符 ~1 token/字, 其余 ~4 字符/token, 视觉约 28px/token (Qwen-VL 系)。优化请求的 max_tokens 也会按剩余空间自动收窄, 避免输出阶段再次溢出。
