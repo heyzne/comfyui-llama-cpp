@@ -343,8 +343,8 @@ def image2base64(image):
     img_base64 = base64.b64encode(buffered.getvalue()).decode('utf-8')
     return img_base64
 
-def _image_to_data_uris(images):
-    """将 ComfyUI IMAGE 张量（单张或批量）转为 base64 JPEG data URI 列表，最长边限制 1024。"""
+def _image_to_data_uris(images, max_size=1024):
+    """将 ComfyUI IMAGE 张量（单张或批量）转为 base64 JPEG data URI 列表，最长边限制 max_size。"""
     uris = []
     tensor = images
     if tensor.ndim == 3:
@@ -352,7 +352,7 @@ def _image_to_data_uris(images):
     for i in range(tensor.shape[0]):
         img_np = (tensor[i].cpu().numpy() * 255.0).clip(0, 255).astype("uint8").squeeze()
         pil_img = Image.fromarray(img_np)
-        max_side = 1024
+        max_side = max_size
         if max(pil_img.size) > max_side:
             ratio = max_side / max(pil_img.size)
             pil_img = pil_img.resize(
@@ -363,6 +363,65 @@ def _image_to_data_uris(images):
         pil_img.save(buf, format="JPEG", quality=85)
         uris.append(f"data:image/jpeg;base64,{base64.b64encode(buf.getvalue()).decode('utf-8')}")
     return uris
+
+# ── 提示词优化的上下文自适应 (多模态 chunk 超出 n_ctx 时自动降级) ──
+# Qwen 系 chat handler 禁用了 context shift, 一旦 prompt + 图片 token 超过 n_ctx 会直接抛
+# RuntimeError。这里按上下文预算选择图片边长, 并在失败时逐级缩小重试, 最后退回纯文本优化。
+_OPT_IMAGE_SIZES = [1024, 768, 512, 384, 256]
+
+
+def _model_n_ctx():
+    """读取当前模型的上下文长度, 无法确定时返回 0。"""
+    llm = LLAMA_CPP_STORAGE.llm
+    try:
+        v = llm.n_ctx()
+        if isinstance(v, int) and v > 0:
+            return v
+    except Exception:
+        pass
+    try:
+        v = LLAMA_CPP_STORAGE.current_config.get("n_ctx")
+        if isinstance(v, int) and v > 0:
+            return v
+    except Exception:
+        pass
+    return 0
+
+
+def _estimate_text_tokens(text):
+    """粗略估算文本的 token 数: 中日韩字符按 1 token/字, 其余按 4 字符/token。"""
+    if not text:
+        return 0
+    cjk = sum(1 for ch in text if "\u4e00" <= ch <= "\u9fff" or "\u3400" <= ch <= "\u4dbf")
+    return int(cjk + (len(text) - cjk) / 4) + 8
+
+
+def _estimate_image_tokens(size, count):
+    """粗略估算视觉 token 数 (Qwen-VL 系约 28px/token, 按最坏的正方形估算)。"""
+    if count <= 0:
+        return 0
+    return int((size / 28.0) ** 2) * count
+
+
+def _fit_image_size(text_tokens, image_count, n_ctx, reserve_tokens):
+    """在上下文预算内挑选可用的最大图片边长。"""
+    if image_count <= 0 or n_ctx <= 0:
+        return _OPT_IMAGE_SIZES[0]
+    budget = n_ctx - reserve_tokens - text_tokens
+    for size in _OPT_IMAGE_SIZES:
+        if _estimate_image_tokens(size, image_count) <= budget:
+            return size
+    return _OPT_IMAGE_SIZES[-1]
+
+
+def _candidate_sizes(fit_size):
+    """返回从 fit_size 起的逐级缩小候选列表。"""
+    try:
+        idx = _OPT_IMAGE_SIZES.index(fit_size)
+    except ValueError:
+        idx = 0
+    return _OPT_IMAGE_SIZES[idx:]
+
 
 def parse_json(json_str):
     json_output = json_str.strip().removeprefix("```json").removesuffix("```")
@@ -660,50 +719,102 @@ class llama_cpp_instruct_adv:
             if not _src:
                 _src = preset_prompts[preset_prompt].replace("#", "").replace("@", "video" if video_input else "image").strip()
             if _src:
-                # 参考图一并送入优化 pass (已限制最长边 1024)
-                opt_uris = []
-                opt_captions = []
-                if images is not None:
+                # 参考图一并送入优化 pass (按上下文预算自适应缩放, 避免超出 n_ctx)
+                has_images = images is not None
+                if has_images:
                     if not _chat_handler_has_vision(LLAMA_CPP_STORAGE.chat_handler):
                         raise ValueError("Image input detected, but the loaded model is not configured with a mmproj module.")
+
+                _n_ctx = _model_n_ctx()
+                _reserve = int(_parameters.get("max_tokens", 1024) or 1024) + 64
+
+                # 反推 pass: 逐张描述参考图内容 (单图 + 短提示词, 上下文压力小)
+                opt_captions = []
+                cap_uris = []
+                if has_images:
+                    _cap_size = _fit_image_size(_estimate_text_tokens(IMAGE_CAPTION_PROMPT), 1, _n_ctx, _reserve)
                     for img in images:
-                        opt_uris.extend(_image_to_data_uris(img))
-                    # 反推 pass: 逐张描述参考图内容, 作为 skill 优化的上下文
-                    for uri in opt_uris:
+                        cap_uris.extend(_image_to_data_uris(img, _cap_size))
+                    for uri in cap_uris:
                         cap_messages = [
                             {"role": "user", "content": [
                                 {"type": "text", "text": IMAGE_CAPTION_PROMPT},
                                 {"type": "image_url", "image_url": {"url": uri}},
                             ]}
                         ]
-                        cap_out = LLAMA_CPP_STORAGE.llm.create_chat_completion(messages=cap_messages, seed=seed, **_parameters)
-                        opt_captions.append(cap_out['choices'][0]['message']['content'].removeprefix(": ").strip())
+                        try:
+                            cap_out = LLAMA_CPP_STORAGE.llm.create_chat_completion(messages=cap_messages, seed=seed, **_parameters)
+                            opt_captions.append(cap_out['choices'][0]['message']['content'].removeprefix(": ").strip())
+                        except RuntimeError:
+                            # 单张反推失败(如上下文不足)时跳过该图, 不阻断整体流程
+                            opt_captions.append("")
 
-                if 生成模式.startswith("H3"):
-                    core_mode = normalize_h3_mode(生成模式)
-                    if _opt_lang == "中英双语":
-                        opt_system = build_h3_system_prompt("仅英文")
-                    else:
-                        opt_system = build_h3_system_prompt(_opt_lang)
-                    opt_user = build_h3_user_message(
-                        _src, core_mode, image_count=len(opt_uris), no_bgm=无背景音乐,
+                def _build_opt_pair(image_count):
+                    """按图片数量构建 (system_prompt, user_message, image_label)。"""
+                    if 生成模式.startswith("H3"):
+                        _core = normalize_h3_mode(生成模式)
+                        _sys = build_h3_system_prompt("仅英文" if _opt_lang == "中英双语" else _opt_lang)
+                        _user = build_h3_user_message(
+                            _src, _core, image_count=image_count, no_bgm=无背景音乐,
+                            image_descriptions=opt_captions,
+                        )
+                        return _sys, _user, "<Picture {n}>"
+                    _sys = build_qwen_image_system_prompt(生成模式, "仅英文" if _opt_lang == "中英双语" else _opt_lang)
+                    _user = build_qwen_image_user_message(
+                        _src, 生成模式, image_count=image_count,
                         image_descriptions=opt_captions,
                     )
-                    opt_label = "<Picture {n}>"
-                else:
-                    if _opt_lang == "中英双语":
-                        opt_system = build_qwen_image_system_prompt(生成模式, "仅英文")
-                    else:
-                        opt_system = build_qwen_image_system_prompt(生成模式, _opt_lang)
-                    opt_user = build_qwen_image_user_message(
-                        _src, 生成模式, image_count=len(opt_uris),
-                        image_descriptions=opt_captions,
-                    )
-                    opt_label = "<image{n}>"
+                    return _sys, _user, "<image{n}>"
 
-                opt_messages = build_messages(opt_system, opt_user, opt_uris, opt_label)
-                opt_output = LLAMA_CPP_STORAGE.llm.create_chat_completion(messages=opt_messages, seed=seed, **_parameters)
-                opt_text = opt_output['choices'][0]['message']['content'].removeprefix(": ").strip()
+                _n_img = len(cap_uris)
+                _sys0, _user0, _ = _build_opt_pair(_n_img)
+                _est_tokens = _estimate_text_tokens(_sys0) + _estimate_text_tokens(_user0)
+
+                # 优化 pass 的输出长度上限: 给 prompt 留出余量, 避免再次溢出
+                _opt_kwargs = dict(_parameters)
+                _mt = int(_opt_kwargs.get("max_tokens", 1024) or 1024)
+                if _n_ctx > 0:
+                    _room = _n_ctx - _est_tokens - 128
+                    if _room < _mt:
+                        _opt_kwargs["max_tokens"] = max(256, _room)
+
+                # 逐级缩小图片边长重试, 直到上下文放得下
+                opt_text = None
+                for _size in _candidate_sizes(_fit_image_size(_est_tokens, _n_img, _n_ctx, _reserve)):
+                    _uris = []
+                    if _n_img:
+                        for img in images:
+                            _uris.extend(_image_to_data_uris(img, _size))
+                    _sys_p, _user_p, _label = _build_opt_pair(len(_uris))
+                    try:
+                        opt_output = LLAMA_CPP_STORAGE.llm.create_chat_completion(
+                            messages=build_messages(_sys_p, _user_p, _uris, _label), seed=seed, **_opt_kwargs)
+                        opt_text = opt_output['choices'][0]['message']['content'].removeprefix(": ").strip()
+                        break
+                    except RuntimeError as e:
+                        if "context" not in str(e).lower() and "n_ctx" not in str(e).lower():
+                            raise
+                        _last_err = e
+                        continue
+
+                if opt_text is None:
+                    # 兜底: 不带图片, 仅用反推描述做纯文本优化
+                    _sys_p, _user_p, _label = _build_opt_pair(0)
+                    _caps = " ".join(f"Image {i + 1}: {c}" for i, c in enumerate(opt_captions) if c)
+                    if _caps:
+                        _user_p += "\n\n[Reference Image Captions] (images omitted due to context limit) " + _caps
+                    try:
+                        opt_output = LLAMA_CPP_STORAGE.llm.create_chat_completion(
+                            messages=build_messages(_sys_p, _user_p, [], _label), seed=seed, **_opt_kwargs)
+                        opt_text = opt_output['choices'][0]['message']['content'].removeprefix(": ").strip()
+                    except RuntimeError as e:
+                        if "context" in str(e).lower() or "n_ctx" in str(e).lower():
+                            raise RuntimeError(
+                                f"Prompt optimizer failed: even the text-only request exceeds the model context "
+                                f"(n_ctx={_n_ctx}). Please increase n_ctx in the Llama-cpp Model Loader node, "
+                                f"or shorten the prompt / use fewer reference images."
+                            ) from e
+                        raise
 
                 # 双语: 第二次推理将英文精确翻译为中文; 主推理使用英文版
                 if _opt_lang == "中英双语":

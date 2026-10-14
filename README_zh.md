@@ -21,6 +21,11 @@ python -m pip install -r ComfyUI-llama-cpp/requirements.txt
 
 ## 更新日志
 
+#### v1.4.5
+- **修复上下文溢出崩溃**: 解决 `Qwen35ChatHandler: Multimodal chunk exceeded context limit (n_ctx=8192)` 报错。提示词优化 pass 现按上下文预算自动选择参考图边长 (1024→768→512→384→256), 失败时逐级缩小重试; 仍放不下则退回纯文本优化 (保留反推描述); 单张反推失败会跳过而不中断整体流程。
+  > 估算依据: 中日韩字符 ~1 token/字, 其余 ~4 字符/token, 视觉约 28px/token (Qwen-VL 系)。优化请求的 max_tokens 也会按剩余空间自动收窄, 避免输出阶段再次溢出。
+  > 若仍报上下文不足, 请在 `Llama-cpp Model Loader` 节点调大 `n_ctx`, 或减少参考图数量 / 缩短提示词。
+
 #### v1.4.4
 - **用户意图优先**: 修复优化器忽略自定义提示词动作的问题 (如输入 "唱着歌曲" 但参考图是弹琵琶, 优化结果丢失唱歌)。优化请求现注入 [Priority Rule]: 用户提示词是首要创作意图, 其描述的动作/事件 (唱歌、跳舞、对话等) 即使参考图中不可见或与画面矛盾, 也必须保留在优化结果中; 参考图仅提供外观/服装/道具/场景/风格。
 - **参数中文化**: `generation_mode` / `output_language` / `no_bgm` 更名为 `生成模式` / `输出语言` / `无背景音乐`。
