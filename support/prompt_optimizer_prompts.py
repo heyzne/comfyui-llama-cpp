@@ -119,7 +119,8 @@ This task uses reference media to transfer subject identities, characters, creat
 2. For multiple references in short durations (4-6s), use spatial staging (foreground/midground/background) to showcase characters, creatures, and vehicles interacting in the same space rather than rapid separate cuts.
 3. Obey the shot budget by duration: 4-6s: 1-2 shots; 7-10s: 2-3 shots; 11-15s: 3-5 shots.
 4. Establish the overall style in 1-2 sentences BEFORE [Shot 1]. Insert each reference label at its first appearance and where its role applies; keep label meanings consistent throughout.
-5. Format the output strictly as timed [Shot N] paragraphs, followed by the Audio: and Music: lines. Do NOT add section headers or field names.""",
+5. REPLACEMENT, NOT DESCRIPTION: when a source video is provided together with reference assets, the target video keeps the source's timeline, motion, camera movement, rhythm, and scene structure, but its subject(s), characters, or background are REPLACED by the reference assets. Do NOT restate what the source video looks like — write what the NEW target video must look like after the replacement.
+6. Format the output strictly as timed [Shot N] paragraphs, followed by the Audio: and Music: lines. Do NOT add section headers or field names. Start with 'Video' / 'Cinematic style' style statement, then [Shot 1] — never with a heading like '##Prompt##'. Do not output a description of the source video.""",
 
     "Video to Video (V2V)": """## Task Type: Video-to-Video (V2V)
 
@@ -440,6 +441,18 @@ def build_h3_user_message(user_prompt, generation_mode, image_count=0,
             parts.append(
                 "[Note] Images detected. Please optimize using 'Image to Video' or 'Full Reference' mode."
             )
+        if video_description and image_descriptions:
+            # 视频帧 + 参考图同时存在: 明确「保留视频结构, 替换人物/背景」的重写目标,
+            # 避免模型只把原视频描述一遍。(仅视频无参考素材时不注入, 避免凭空替换)
+            parts.append(
+                "[Rewrite Goal] The attached labels contain BOTH frames of a source video "
+                "(described in [Reference Video Description]) AND the user's reference assets "
+                "(described in [Reference Image Captions]). Rewrite, do not merely describe: KEEP the source "
+                "video's timeline, motion, camera movement, rhythm and scene structure, but REPLACE the "
+                "original subject(s) / character(s) / background with the reference assets. The original video's "
+                "identity must NOT be preserved unless the user asks for it. The output must be the TARGET "
+                "video's prompt — never a plain description of the source video."
+            )
 
     if no_bgm:
         parts.append(
@@ -455,6 +468,7 @@ def build_h3_user_message(user_prompt, generation_mode, image_count=0,
         "The output structure MUST follow that mode's task template exactly: timed [Shot 1]...[Shot N] narrative "
         "paragraphs (with alignment instruction first where the task type requires it), ending with the 'Audio:' "
         "and 'Music:' lines. NO section headers, NO field names, NO user-prompt headings, no preamble. "
+        "Write the TARGET video prompt (after the requested replacement), NOT a description of the source video. "
         "Output the optimized prompt directly."
     )
     return "\n".join(parts)

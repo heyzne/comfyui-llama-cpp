@@ -799,6 +799,20 @@ class llama_cpp_instruct_adv:
             _src = custom_prompt.strip()
             if not _src:
                 _src = preset_prompts[preset_prompt].replace("#", "").replace("@", "video" if video_input else "image").strip()
+                # 描述类预设 (如 "Normal - Describe": "Describe this @.") 会诱导模型只输出原素材描述,
+                # 与「按 skill 重写」的目标冲突; 此时改用默认的重写指令作为优化源。
+                if _src.lower().startswith("describe") or "describe" in preset_prompt.lower():
+                    if 生成模式.startswith("H3"):
+                        _src = (
+                            "Rewrite the source video prompt: keep the source video's timeline, motion, "
+                            "camera movement and scene structure, but replace the original subject(s) and "
+                            "background with the provided reference assets."
+                        )
+                    else:
+                        _src = (
+                            "Rewrite the references and guidance into a polished image-generation prompt, "
+                            "replacing the original subject or background with the provided reference assets."
+                        )
             if _src:
                 # 参考图一并送入优化 pass (按上下文预算自适应缩放, 避免超出 n_ctx)
                 has_images = images is not None
