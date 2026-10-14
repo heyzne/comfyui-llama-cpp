@@ -21,6 +21,9 @@ python -m pip install -r ComfyUI-llama-cpp/requirements.txt
 
 ## 更新日志
 
+#### v1.5.1
+- **性能修复**: 优化阶段反推的帧数上限在所有模式下统一为 8 帧。此前 `one by one` / `images` 模式会逐帧全量反推 (长视频可达数百次调用, 极其耗时); 现在超过 8 帧时均匀采样 8 帧做反推与优化参考。主推理仍按所选模式处理全部帧 (`one by one` 逐张 / `video` 按 max_frames 采样)。
+
 #### v1.5.0
 - **video 输入口类型改为 IMAGE**: `Llama-cpp Instruct` 的 `video` 端口由 VIDEO 类型改为 IMAGE 类型, 可直接连接视频加载节点输出的帧序列 (如截图中的 AnimateDiff 加载器「图像」输出)。配合 `推理模式=video` 使用时, 提示词优化前会先对视频整体反推 (采样≤8 帧描述动作/运镜/时间变化)。与 images/image_N 同时连接时视频帧排在图片之后。
 

@@ -817,8 +817,13 @@ class llama_cpp_instruct_adv:
                                     raise
                                 continue  # 减帧重试
                     else:
-                        opt_images = images
-                        for img in images:
+                        # 图片/逐帧模式: 帧数超过 8 时均匀采样 8 张做反推与优化参考,
+                        # 避免长视频逐帧反推耗时过长 (主推理仍按所选模式处理全部帧)
+                        if len(images) > 8:
+                            opt_images = [images[i] for i in np.linspace(0, len(images) - 1, 8, dtype=int)]
+                        else:
+                            opt_images = images
+                        for img in opt_images:
                             cap_uris.extend(_image_to_data_uris(img, _cap_size))
                         for uri in cap_uris:
                             cap_messages = [
