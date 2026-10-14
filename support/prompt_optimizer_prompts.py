@@ -120,6 +120,15 @@ This task uses reference media to transfer subject identities, characters, creat
 3. Obey the shot budget by duration: 4-6s: 1-2 shots; 7-10s: 2-3 shots; 11-15s: 3-5 shots.
 4. Establish the overall style in 1-2 sentences BEFORE [Shot 1]. Insert each reference label at its first appearance and where its role applies; keep label meanings consistent throughout.
 5. Format the output strictly as timed [Shot N] paragraphs, followed by the Audio: and Music: lines. Do NOT add section headers or field names.""",
+
+    "Video to Video (V2V)": """## Task Type: Video-to-Video (V2V)
+
+This task writes a cinematic timeline description based on a reference video <Video 1> (the attached reference labels are frames evenly sampled from this ONE source video, in chronological order).
+
+### Storyboarding Rules:
+1. Divide the narrative into timed shots ([Shot 1], [Shot 2] At MM:SS.mmm).
+2. Follow the camera movement, rhythm, and shot structure of <Video 1>, applying the requested visual changes.
+3. Format the output strictly as a series of timed [Shot N] paragraphs, followed by the Audio: and Music: lines. Do NOT add section headers or field names.""",
 }
 
 
@@ -256,6 +265,7 @@ H3_MODES = (
     "H3 - 首尾帧 (FL2VA)",
     "H3 - 尾帧 (L2VA)",
     "H3 - 全参考 (Ref2VA)",
+    "H3 - 视频生视频 (V2V)",
 )
 
 QWEN_IMAGE_MODES = (
@@ -275,6 +285,8 @@ H3_MODE_ZH_TO_EN = {
     "首尾帧 (FL2VA)": "First+Last Frame (FL2VA)",
     "尾帧 (L2VA)": "Last Frame (L2VA)",
     "全参考 (Ref2VA)": "Full Reference (Ref2VA)",
+    "视频生视频 (V2V)": "Video to Video (V2V)",
+    "自动": "Auto",
 }
 
 
@@ -296,18 +308,105 @@ H3_MODE_HINTS = {
     "First+Last Frame (FL2VA)": "Current mode: FL2VA (First+Last Frame). <Picture 1> is the starting frame (0.00s), <Picture 2> the ending frame. Bridge them with continuous physical motion. IMPORTANT: in FL2VA only, write Picture N WITHOUT angle brackets and Shot N WITHOUT square brackets, both in the alignment instruction and the body.",
     "Last Frame (L2VA)": "Current mode: L2VA (Last Frame). <Picture 1> is the ending frame at S.SS seconds. Infer a plausible preceding state and narrate the causal action converging on the final frame. Alignment instruction: 'How the reference pictures align with the target video — <Picture 1> (from [Shot N]) aligns with the S.SS-second mark of the target video.'",
     "Full Reference (Ref2VA)": "Current mode: Ref2VA (Full Reference). Reference media (character images, action videos, scene images, music) transfer identities and motion into the target video. Define <Subject N>/<Picture N>/<Video N>/<Audio N> labels at first appearance, establish style in 1-2 sentences before [Shot 1], stage multiple references together in the same frame, and output timed [Shot N] paragraphs + Audio:/Music: lines (NO section headers).",
+    "Video to Video (V2V)": "Current mode: V2V (Video to Video). The attached reference labels are frames sampled from ONE source video <Video 1>. Follow its camera movement, rhythm, and shot structure while applying the requested visual changes; output timed [Shot N] paragraphs + Audio:/Music: lines (NO section headers).",
 }
+
+
+# ============================================================
+# 风格技能 (源自 MiniMax 官方 H3 skills 包的 8 个风格生成器)
+# 官方技能是 MiniMax Hub agent 工作流技能; 此处提炼其风格要义,
+# 作为提示词优化时的风格指令注入, 输出仍遵循 h3-prompt-writing 格式。
+# ============================================================
+
+STYLE_SKILLS = {
+    "3D动画短片": (
+        "Style: complete stylized 3D animated short. Pixar-inspired 3D cartoon rendering "
+        "(C4D + Octane look, high-end animated-feature quality); exaggerated geometric character "
+        "simplification with rich material detail, ~2.5-3 head-tall friendly proportions, big heads, "
+        "compact bodies, highly readable silhouettes. Story-first structure with strict character "
+        "consistency and scene continuity across all shots; control timing, camera, performance, and audio."
+    ),
+    "品牌宣传视频": (
+        "Style: brand promo short. Highlight product capabilities, key use cases, and a clear call to "
+        "action; precise beat/shot planning; describe only verifiable brand assets supplied by the user; "
+        "clean premium camera language; suited for launches, website showcases, and social promotion."
+    ),
+    "合作游戏开场": (
+        "Style: two-player co-op game menu / opening animation. Feature two characters with player cards "
+        "and menu interaction motion; lock identity cues across shots; coordinated color scheme, buttons, "
+        "icons, and typography; energetic game-trailer pacing."
+    ),
+    "手绘实拍融合": (
+        "Style: surreal short blending rough glowing hand-drawn animation with live-action space. "
+        "Crayon/chalk-like glowing stroke texture; a drawn object makes physical contact with the real "
+        "world, then continuous morphing and a delayed handheld chase camera; playful tone, never horror."
+    ),
+    "极简产品广告": (
+        "Style: clean minimalist product ad short. Distill selling points into concise ad copy; build "
+        "stable product anchors; beat-synced typography and storyboards; premium camera language for "
+        "e-commerce promotion and product launches."
+    ),
+    "音乐视频字幕": (
+        "Style: music video with beat-reactive lyric typography. Analyze beat and vocal timing; keep "
+        "character, scene, and on-screen text references separate; plan lyric text moments; decompose the "
+        "song into connected shots with a consistent visual identity."
+    ),
+    "纸拼贴解说": (
+        "Style: tactile paper-collage explainer. Visual metaphors built from cut-paper layers and halftone "
+        "textures; stop-motion paper movement with tactile sound effects; expressive handmade look for "
+        "knowledge points, opinions, and story visuals."
+    ),
+    "纸艺定格解说": (
+        "Style: papercraft stop-motion explainer. Paper characters, layered diorama sets, and props in a "
+        "cut-paper / pop-up-book / miniature look; explain the topic through staged reveals with character "
+        "and scene continuity."
+    ),
+}
+
+# 自动推断关键词 (对用户提示词做匹配, 命中最多的技能生效; 无命中则不注入风格)
+STYLE_SKILL_KEYWORDS = {
+    "3D动画短片": ("3d", "三维", "动画短片", "皮克斯", "卡通渲染", "动画电影", "q版"),
+    "品牌宣传视频": ("品牌", "宣传", "推广", "品牌片", "brand", "promo"),
+    "合作游戏开场": ("游戏", "开场动画", "双人", "合作", "玩家", "game intro"),
+    "手绘实拍融合": ("手绘", "实拍", "发光线条", "蜡笔", "粉笔", "融合"),
+    "极简产品广告": ("产品", "广告", "电商", "极简", "新品", "带货", "product ad"),
+    "音乐视频字幕": ("音乐视频", "mv", "歌词", "字幕", "卡点", "music video"),
+    "纸拼贴解说": ("纸拼贴", "拼贴", "剪纸", "半调", "halftone"),
+    "纸艺定格解说": ("纸艺", "定格", "立体书", "纸偶", "微缩", "papercraft", "stop motion"),
+}
+
+
+def resolve_style_skill(user_text):
+    """自动模式: 按关键词命中数推断风格技能; 无命中返回 None (不注入风格)。"""
+    text = (user_text or "").lower()
+    if not text.strip():
+        return None
+    best, best_hits = None, 0
+    for label, kws in STYLE_SKILL_KEYWORDS.items():
+        hits = sum(1 for kw in kws if kw in text)
+        if hits > best_hits:
+            best, best_hits = label, hits
+    return best
+
+
+def build_style_skill_block(style_label):
+    """将风格技能格式化为注入优化请求的文本块; 无效标签返回空串。"""
+    directive = STYLE_SKILLS.get(style_label)
+    if not directive:
+        return ""
+    return "[Style Skill] " + directive
 
 
 def build_h3_user_message(user_prompt, generation_mode, image_count=0,
                           no_bgm=False, extra_requirements="",
                           image_descriptions=None, video_description=None,
-                          caption_start_index=1):
+                          caption_start_index=1, style_skill=None):
     """Build the H3 user message. generation_mode may be the full combo label
     ('H3 - 文生视频 (T2VA)') or the English core name. image_descriptions is the
     auto-caption list of reference images (index N -> <Picture N+1>);
     video_description is the whole-video caption when the references are video frames;
-    caption_start_index is the reference label number of the first captioned image."""
+    caption_start_index is the reference label number of the first captioned image;
+    style_skill is the selected/auto-resolved style skill label (Chinese)."""
     generation_mode = normalize_h3_mode(generation_mode)
     parts = [f"[Generation Mode] {generation_mode}"]
 
@@ -315,6 +414,9 @@ def build_h3_user_message(user_prompt, generation_mode, image_count=0,
         parts.append(f"[Extra Requirements] {extra_requirements.strip()}")
 
     parts.append(f"[Mode Hint] {H3_MODE_HINTS.get(generation_mode, '')}")
+    _style_block = build_style_skill_block(style_skill)
+    if _style_block:
+        parts.append(_style_block)
     prompt_text = (user_prompt or "").strip()
     if prompt_text:
         parts.append(f"[User Original Prompt]\n{prompt_text}")

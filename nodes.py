@@ -23,6 +23,8 @@ from .support.prompt_optimizer_prompts import (
     PROMPT_TRANSLATE_TO_CHINESE_SYSTEM,
     IMAGE_CAPTION_PROMPT,
     VIDEO_CAPTION_PROMPT,
+    STYLE_SKILLS,
+    resolve_style_skill,
 )
 
 import folder_paths
@@ -626,9 +628,13 @@ class llama_cpp_instruct_adv:
                 "llama_model": ("LLAMACPPMODEL",),
                 "preset_prompt": (preset_tags, {"default": preset_tags[1]}),
                 "custom_prompt": ("STRING", {"default": "", "multiline": True, "placeholder": 'user_prompt\n\nFor preset hints marked with an "*", this will be used to fill the placeholder (e.g., Object names in BBox detection)\nOtherwise, this will override the preset prompts.'}),
-                "生成模式": (["None"] + PROMPT_OPTIMIZER_MODES, {
+                "生成模式": (["None", "H3 - 自动"] + PROMPT_OPTIMIZER_MODES, {
                     "default": "None",
-                    "tooltip": "提示词优化: 推理前先用 LLM 将 Prompt 改写为 MiniMax-H3 / Qwen-Image-2.1 专用提示词, 再用优化后的提示词进行主推理。\nNone = 关闭优化。\n优化结果为中英双语 (英文版用于主推理, 中文版便于查看)。\n参考 ComfyUI-xiaozhuguang (MIT) 移植。"
+                    "tooltip": "提示词优化: 推理前先用 LLM 将 Prompt 改写为 MiniMax-H3 / Qwen-Image-2.1 专用提示词, 再用优化后的提示词进行主推理。\nNone = 关闭优化。\nH3 - 自动 = 按输入自动推断: 无素材→T2VA, 1图→I2VA, 2图→FL2VA, 3图以上→Ref2VA, video口连接→V2V。\n优化结果为中英双语 (英文版用于主推理, 中文版便于查看)。"
+                }),
+                "风格技能": (["自动"] + list(STYLE_SKILLS.keys()), {
+                    "default": "自动",
+                    "tooltip": "风格技能 (源自 MiniMax 官方 H3 skills 包的 8 个风格生成器, 中文显示)。\n自动 = 按用户提示词关键词自动匹配; 无命中则不注入风格。\n选中具体技能时注入其风格要义 (视觉风格锁/制作重点/一致性规则), 输出结构仍遵循所 选生成模式的 H3 skill。仅 H3 模式生效。"
                 }),
                 "无背景音乐": ("BOOLEAN", {
                     "default": False,
@@ -702,7 +708,7 @@ class llama_cpp_instruct_adv:
                         item["image_url"]["url"] = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAACXBIWXMAAAsTAAALEwEAmpwYAAAADElEQVQImWP4//8/AAX+Av5Y8msOAAAAAElFTkSuQmCC"
         return clean_messages
     
-    def process(self, llama_model, preset_prompt, custom_prompt, 生成模式, 无背景音乐, system_prompt, inference_mode, max_frames, max_size, seed, force_offload, save_states, unique_id, parameters=None, video=None, images=None, image_1=None, image_2=None, image_3=None, image_4=None, image_5=None, image_6=None, image_7=None, image_8=None, image_9=None, image_10=None):
+    def process(self, llama_model, preset_prompt, custom_prompt, 生成模式, 风格技能, 无背景音乐, system_prompt, inference_mode, max_frames, max_size, seed, force_offload, save_states, unique_id, parameters=None, video=None, images=None, image_1=None, image_2=None, image_3=None, image_4=None, image_5=None, image_6=None, image_7=None, image_8=None, image_9=None, image_10=None):
         # 合并所有图像输入（含旧版工作流使用的 images 批量槽），平坦化为单张图像列表（不限制尺寸）
         # video 槽为 IMAGE 类型 (帧序列视为一段视频), 排在 images/image_N 之前
         all_images = []
@@ -720,6 +726,22 @@ class llama_cpp_instruct_adv:
                 for b in range(img.shape[0]):
                     all_images.append(img[b:b+1])
         images = all_images if all_images else None
+
+        # 生成模式 = H3 - 自动: 按输入素材自动推断任务模式 (参考 ComfyUI-MiniMax-H3-Promptor 的 task_type=Auto)
+        if 生成模式 == "H3 - 自动":
+            if n_video >= 1:
+                # 仅视频 → V2V; 视频 + 参考图 → 全参考
+                生成模式 = "H3 - 视频生视频 (V2V)" if len(all_images) == n_video else "H3 - 全参考 (Ref2VA)"
+            else:
+                _n_imgs = len(all_images)
+                if _n_imgs == 0:
+                    生成模式 = "H3 - 文生视频 (T2VA)"
+                elif _n_imgs == 1:
+                    生成模式 = "H3 - 图生视频 (I2VA)"
+                elif _n_imgs == 2:
+                    生成模式 = "H3 - 首尾帧 (FL2VA)"
+                else:
+                    生成模式 = "H3 - 全参考 (Ref2VA)"
 
         if not LLAMA_CPP_STORAGE.llm:
             LLAMA_CPP_STORAGE.load_model(llama_model)
@@ -845,6 +867,11 @@ class llama_cpp_instruct_adv:
                                 # 单张反推失败(如上下文不足)时跳过该图, 不阻断整体流程
                                 opt_captions.append("")
 
+                # 风格技能: 自动 = 按用户提示词关键词推断; 指定 = 直接使用
+                _style_label = 风格技能
+                if _style_label == "自动":
+                    _style_label = resolve_style_skill(_src)
+
                 def _build_opt_pair(image_count):
                     """按图片数量构建 (system_prompt, user_message, image_label)。
 
@@ -859,6 +886,7 @@ class llama_cpp_instruct_adv:
                             image_descriptions=opt_captions,
                             video_description=_video_desc,
                             caption_start_index=_caption_start,
+                            style_skill=_style_label,
                         )
                         return _sys, _user, "<Picture {n}>"
                     _sys = build_qwen_image_system_prompt(生成模式, "仅英文")

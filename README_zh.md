@@ -21,6 +21,11 @@ python -m pip install -r ComfyUI-llama-cpp/requirements.txt
 
 ## 更新日志
 
+#### v1.6.0
+- **新增 `风格技能` 下拉 (中文, 源自 MiniMax 官方 H3 skills 包的 8 个风格生成器)**: `自动` + 3D动画短片 / 品牌宣传视频 / 合作游戏开场 / 手绘实拍融合 / 极简产品广告 / 音乐视频字幕 / 纸拼贴解说 / 纸艺定格解说。`自动` 按用户提示词关键词匹配 (无命中不注入); 指定技能时注入其风格要义 (视觉风格锁/制作重点/一致性规则) 到优化请求, 输出结构仍遵循所选生成模式的 H3 skill。仅 H3 模式生效。
+- **生成模式新增 `H3 - 自动`**: 按输入素材自动推断任务模式 (参考 ComfyUI-MiniMax-H3-Promptor 的 task_type=Auto): 无素材→T2VA, 1图→I2VA, 2图→FL2VA, 3图以上→Ref2VA, 仅 video口→V2V, 视频+参考图→Ref2VA。
+- **生成模式新增 `H3 - 视频生视频 (V2V)`**: video 口帧视为源视频 <Video 1>, 按其运镜/节奏/分镜结构套用所请求的视觉更改。
+
 #### v1.5.4
 - **H3 skill 全面替换为官方格式**: 参考 [ComfyUI-MiniMax-H3-Promptor](https://github.com/1038lab/ComfyUI-MiniMax-H3-Promptor) (GPL-3.0) 所用的 MiniMax H3 官方 skill 结构重写 (独立实现, 未逐字复制)。新输出格式: 定时 `[Shot 1]...[Shot N] At MM:SS.mmm` 段落 + 结尾 `Audio:` / `Music:` 两行, **不再使用** integrated_multimodal_description / 六段式字段头。
   - 导演底座: 群像编排与题材自适应、前景/中景/背景同框空间调度、按时长的分镜预算 (4-6s: 1-2 镜; 7-10s: 2-3 镜; 11-15s: 3-5 镜)、动作衔接转场、官方对白语法 `<Subject N> (SN) ... says: <d>[Language] "..."</d>`、镜头术语表 (含振幅/速度)、屏幕文字双引号规则。
