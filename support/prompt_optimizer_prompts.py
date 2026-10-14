@@ -182,16 +182,35 @@ VIDEO_CAPTION_PROMPT = (
 )
 
 
-def build_video_reference_block(video_description):
-    """将视频整体反推描述格式化为注入优化请求的文本块。"""
+def build_video_reference_block(video_description, replacement=False):
+    """将源视频整体反推描述格式化为注入优化请求的文本块。
+
+    replacement=True: 同时提供了参考素材 (人物/背景), 此时源视频只作为「结构模板」——
+    保留时间线/运镜/节奏, 但人物与背景必须被参考素材替换, 禁止复述原视频描述。
+    """
     desc = (video_description or "").strip()
     if not desc:
         return ""
-    return (
-        "[Reference Video] The attached reference labels are frames evenly sampled from ONE video "
-        "in chronological order — treat them as a single video, NOT as separate images.\n"
-        "[Reference Video Description] " + desc
-    )
+    lines = [
+        "[Source Video] The caption below is an auto-description of the SOURCE video. The source video "
+        "frames themselves are NOT attached to this request - only the user's reference assets are."
+    ]
+    if replacement:
+        lines.append(
+            "[Replacement Rule] Use the caption ONLY as a structural template: keep its timeline, motion, "
+            "camera movement, rhythm, shot order and scene layout. REPLACE every subject, character, "
+            "costume, prop and background with the reference assets described in "
+            "[Reference Image Captions]. Do NOT reproduce, paraphrase or summarise that caption. "
+            "The output must read as the prompt of a NEW target video, never as a description of the "
+            "source video."
+        )
+    else:
+        lines.append(
+            "[Usage] Follow the source video's camera movement, rhythm and shot structure while applying "
+            "the requested visual changes; rewrite it as the TARGET video's prompt, not as a caption."
+        )
+    lines.append("[Source Video Caption] " + desc)
+    return "\n".join(lines)
 
 
 def build_reference_captions_block(image_descriptions, start_index=1):
@@ -237,6 +256,17 @@ FORMAT_PRIORITY_RULE = (
     "the selected mode's skill (for H3 modes: timed [Shot N] paragraphs ending with 'Audio:' and 'Music:' "
     "lines; for Qwen-Image modes: the direct instruction/description), then output that structure directly "
     "without any preamble such as 'Based on the provided images' or 'here is the description'."
+)
+
+
+# 主推理兜底指令: 当提示词优化开启时, 主推理拿到的是「优化后的提示词」而非聊天问题,
+# 若不显式约束, VLM 会直接把附带的原视频/图片再描述一遍, 导致 output 退化成素材描述。
+MAIN_INFERENCE_PROMPT_RULE = (
+    "[Output Rule] The text above is the FINAL generation prompt you must produce. "
+    "Rewrite and output that prompt directly for the target video/image, following the attached reference "
+    "media as the source of subject identity, appearance and background. "
+    "Do NOT describe the attached media, do NOT answer as a chatbot, do NOT add explanations or headings. "
+    "Output only the final prompt text."
 )
 
 
@@ -426,32 +456,38 @@ def build_h3_user_message(user_prompt, generation_mode, image_count=0,
     else:
         parts.append("[User Original Prompt]\nNo text prompt was provided. Follow the selected mode and use any attached reference images as context.")
 
-    if image_count > 0:
-        _vid_block = build_video_reference_block(video_description)
+    _has_ref_assets = bool(image_descriptions and any((c or "").strip() for c in image_descriptions))
+    if image_count > 0 or video_description:
+        _vid_block = build_video_reference_block(video_description, replacement=_has_ref_assets)
         _prefix = _vid_block + "\n" if _vid_block else ""
-        parts.append(
-            f"{_prefix}[Reference Images] {image_count} image(s) uploaded, labeled <Picture 1>..<Picture {image_count}> in order.\n"
-            "Please write clear labels and usage for each image. "
-            "Analyze subject appearance, scene style, composition, etc. from the images and incorporate into the prompt optimization.\n"
-            + (build_reference_captions_block(image_descriptions, caption_start_index) + "\n" if image_descriptions else "")
-            + "If the user prompt refers to images by ordinal names such as \"图1/图2\", \"图片1\", or \"image 1\", "
-            "map them in order to the standard labels <Picture 1>..<Picture N> and keep the mapping consistent."
-        )
-        if generation_mode == "Text to Video (T2VA)":
+        if image_count > 0:
+            parts.append(
+                f"{_prefix}[Reference Assets] {image_count} reference image(s) are attached, labeled "
+                f"<Picture 1>..<Picture {image_count}> in order. They are the ASSETS TO INJECT into the "
+                "target video (subject identity, appearance, costume, background), NOT the source video.\n"
+                "Please write clear labels and usage for each image. "
+                "Analyze subject appearance, scene style, composition, etc. from the images and incorporate into the prompt optimization.\n"
+                + (build_reference_captions_block(image_descriptions, caption_start_index) + "\n" if image_descriptions else "")
+                + "If the user prompt refers to images by ordinal names such as \"图1/图2\", \"图片1\", or \"image 1\", "
+                "map them in order to the standard labels <Picture 1>..<Picture N> and keep the mapping consistent."
+            )
+        elif _prefix:
+            parts.append(_prefix.rstrip("\n"))
+        if generation_mode == "Text to Video (T2VA)" and image_count > 0:
             parts.append(
                 "[Note] Images detected. Please optimize using 'Image to Video' or 'Full Reference' mode."
             )
-        if video_description and image_descriptions:
-            # 视频帧 + 参考图同时存在: 明确「保留视频结构, 替换人物/背景」的重写目标,
+        if video_description and _has_ref_assets:
+            # 源视频 + 参考素材同时存在: 明确「保留视频结构, 替换人物/背景」的重写目标,
             # 避免模型只把原视频描述一遍。(仅视频无参考素材时不注入, 避免凭空替换)
             parts.append(
-                "[Rewrite Goal] The attached labels contain BOTH frames of a source video "
-                "(described in [Reference Video Description]) AND the user's reference assets "
-                "(described in [Reference Image Captions]). Rewrite, do not merely describe: KEEP the source "
-                "video's timeline, motion, camera movement, rhythm and scene structure, but REPLACE the "
-                "original subject(s) / character(s) / background with the reference assets. The original video's "
-                "identity must NOT be preserved unless the user asks for it. The output must be the TARGET "
-                "video's prompt — never a plain description of the source video."
+                "[Rewrite Goal] This is a REPLACEMENT rewrite, not a description task. The source video is "
+                "described in [Source Video Caption] and the new assets in [Reference Image Captions]. "
+                "Step 1 - keep ONLY the source video's structure: timeline, motion, camera movement, rhythm, "
+                "shot order and scene layout. Step 2 - REPLACE the original subject(s), character(s), costume "
+                "and background with the reference assets. Step 3 - write the result as the TARGET video's "
+                "prompt in this mode's format. The source video's identity must NOT be preserved unless the "
+                "user explicitly asks for it. Never output a plain description of the source video."
             )
 
     if no_bgm:
@@ -463,13 +499,17 @@ def build_h3_user_message(user_prompt, generation_mode, image_count=0,
             "[Music] End the prompt with a 'Music:' line describing a non-diegetic score that matches the mood, style, and pacing of the video (instrumentation, tempo, dynamics). Do NOT use N/A unless absolutely no music fits the scene."
         )
 
+    _goal = (
+        "Write the TARGET video prompt AFTER the requested replacement, NOT a description of the source video. "
+        if (video_description and _has_ref_assets)
+        else "Write the TARGET video prompt, not a caption of the provided material. "
+    )
     parts.append(
         "\nBased on the above information, optimize the prompt according to the H3 skill of the selected mode. "
         "The output structure MUST follow that mode's task template exactly: timed [Shot 1]...[Shot N] narrative "
         "paragraphs (with alignment instruction first where the task type requires it), ending with the 'Audio:' "
         "and 'Music:' lines. NO section headers, NO field names, NO user-prompt headings, no preamble. "
-        "Write the TARGET video prompt (after the requested replacement), NOT a description of the source video. "
-        "Output the optimized prompt directly."
+        + _goal + "Output the optimized prompt directly."
     )
     return "\n".join(parts)
 
@@ -548,9 +588,10 @@ def build_qwen_image_user_message(user_prompt, generation_mode, image_count=0,
     else:
         parts.append("[User Original Prompt]\nNo text prompt was provided. Follow the selected prompt rules and use any attached reference images as context.")
 
+    _has_ref_assets = bool(image_descriptions and any((c or "").strip() for c in image_descriptions))
     if image_count > 0:
         refs = ", ".join(f"<image{i + 1}>" for i in range(image_count))
-        _vid_block = build_video_reference_block(video_description)
+        _vid_block = build_video_reference_block(video_description, replacement=_has_ref_assets)
         _prefix = _vid_block + "\n" if _vid_block else ""
         parts.append(
             f"{_prefix}[Reference Images] {image_count} image(s) uploaded: {refs}. "

@@ -25,6 +25,7 @@ from .support.prompt_optimizer_prompts import (
     VIDEO_CAPTION_PROMPT,
     STYLE_SKILLS,
     resolve_style_skill,
+    MAIN_INFERENCE_PROMPT_RULE,
 )
 
 import folder_paths
@@ -435,6 +436,37 @@ def _is_context_error(err):
     )
 
 
+def _opt_matches_skill(text, generation_mode):
+    """优化结果是否遵循所选模式的输出结构 (用于触发一次纠正重试)。
+
+    H3 模式必须有 [Shot N] 段落或 Audio: 行; 若模型只把素材描述一遍,
+    这些标记不会出现, 说明它没有按 skill 输出。Qwen-Image 为自由文本, 不做结构判定。
+    """
+    if not text:
+        return False
+    if not str(generation_mode).startswith("H3"):
+        return True
+    low = text.lower()
+    return "[shot" in low or "audio:" in low or "music:" in low
+
+
+def _opt_correction_block(generation_mode, has_replacement):
+    """结构纠正指令: 上一次输出退化成素材描述时使用。"""
+    goal = (
+        "Keep only the source video's structure (timeline, motion, camera, rhythm) and REPLACE the original "
+        "subject / character / background with the reference assets. "
+        if has_replacement else ""
+    )
+    return (
+        "[CORRECTION] Your previous answer was REJECTED: it was a plain description of the provided "
+        "material instead of the target prompt. Output the target prompt ONLY, in this exact structure: "
+        "timed [Shot 1] ... [Shot N] narrative paragraphs (preceded by the alignment instruction when the "
+        "task type requires it), ending with the 'Audio:' and 'Music:' lines. "
+        "No preamble, no headings, no field names, no explanation. " + goal
+        + "Begin now with [Shot 1]."
+    )
+
+
 def _messages_text(messages):
     """提取消息列表中的全部文本, 用于 token 估算。"""
     parts = []
@@ -743,6 +775,10 @@ class llama_cpp_instruct_adv:
                 else:
                     生成模式 = "H3 - 全参考 (Ref2VA)"
 
+        # 参考素材数量 = 视频帧之外的图片数量; 决定优化时是否执行「人物/背景替换」
+        video_input = inference_mode in ("video", "image + video")
+        _n_ref_assets = max(0, len(all_images) - (n_video if video_input else 0))
+
         if not LLAMA_CPP_STORAGE.llm:
             LLAMA_CPP_STORAGE.load_model(llama_model)
             #raise RuntimeError("The model has been unloaded or failed to load!")
@@ -802,16 +838,29 @@ class llama_cpp_instruct_adv:
                 # 描述类预设 (如 "Normal - Describe": "Describe this @.") 会诱导模型只输出原素材描述,
                 # 与「按 skill 重写」的目标冲突; 此时改用默认的重写指令作为优化源。
                 if _src.lower().startswith("describe") or "describe" in preset_prompt.lower():
+                    # 有参考素材 → 替换人物/背景; 只有源视频 → 保留结构并施加用户要求的画面变化
                     if 生成模式.startswith("H3"):
-                        _src = (
-                            "Rewrite the source video prompt: keep the source video's timeline, motion, "
-                            "camera movement and scene structure, but replace the original subject(s) and "
-                            "background with the provided reference assets."
-                        )
+                        if _n_ref_assets > 0 and n_video > 0:
+                            _src = (
+                                "Rewrite the source video prompt: keep the source video's timeline, motion, "
+                                "camera movement and scene structure, but replace the original subject(s) and "
+                                "background with the provided reference assets."
+                            )
+                        elif n_video > 0:
+                            _src = (
+                                "Rewrite the source video into a cinematic target-video prompt: keep its "
+                                "timeline, motion, camera movement and shot structure, and add vivid visual, "
+                                "lighting and atmosphere detail."
+                            )
+                        else:
+                            _src = (
+                                "Rewrite the reference image(s) into a cinematic target-video prompt that "
+                                "starts from the reference content and continues it with continuous motion."
+                            )
                     else:
                         _src = (
                             "Rewrite the references and guidance into a polished image-generation prompt, "
-                            "replacing the original subject or background with the provided reference assets."
+                            "preserving every explicit requirement."
                         )
             if _src:
                 # 参考图一并送入优化 pass (按上下文预算自适应缩放, 避免超出 n_ctx)
@@ -850,10 +899,10 @@ class llama_cpp_instruct_adv:
                             try:
                                 cap_out = LLAMA_CPP_STORAGE.llm.create_chat_completion(messages=cap_messages, seed=seed, **_parameters)
                                 _video_desc = cap_out['choices'][0]['message']['content'].removeprefix(": ").strip()
-                                # 采样帧排在参考序列最前, 与 <Picture 1..N>/<image1..N> 标签顺序一致
-                                opt_images.extend(_sampled[:_n_try])
-                                cap_uris.extend(_v_uris[:_n_try])
-                                _caption_start = _n_try + 1
+                                # 源视频帧仅用于反推, 不再随优化请求一起送入:
+                                # 若把原视频画面贴给优化 pass, VLM 会直接把它看到的画面再描述一遍,
+                                # 导致输出退化成「原视频提示词」而不是替换后的目标提示词。
+                                _caption_start = 1
                                 break
                             except RuntimeError as e:
                                 if not _is_context_error(e):
@@ -926,6 +975,7 @@ class llama_cpp_instruct_adv:
 
                 # 逐级缩小图片边长重试, 直到上下文放得下
                 opt_text = None
+                _used_uris = []
                 for _size in _candidate_sizes(_fit_image_size(_est_tokens, _n_img, _n_ctx, _reserve)):
                     _uris = []
                     if _n_img:
@@ -936,12 +986,30 @@ class llama_cpp_instruct_adv:
                         opt_output = LLAMA_CPP_STORAGE.llm.create_chat_completion(
                             messages=build_messages(_sys_p, _user_p, _uris, _label), seed=seed, **_opt_kwargs)
                         opt_text = opt_output['choices'][0]['message']['content'].removeprefix(": ").strip()
+                        _used_uris = _uris
                         break
                     except RuntimeError as e:
                         if not _is_context_error(e):
                             raise
                         _last_err = e
                         continue
+
+                # 格式守卫: H3 模式要求 [Shot N]/Audio: 结构。若模型只是把素材描述了一遍
+                # (没有按 skill 输出), 用一次纠正重试把它拉回模板结构。
+                if opt_text and 生成模式.startswith("H3") and not _opt_matches_skill(opt_text, 生成模式):
+                    _has_repl = bool(_video_desc) and any((c or "").strip() for c in opt_captions)
+                    _sys_p, _user_p, _label = _build_opt_pair(len(_used_uris))
+                    _retry_user = _user_p + "\n\n" + _opt_correction_block(生成模式, _has_repl)
+                    try:
+                        _r_out = LLAMA_CPP_STORAGE.llm.create_chat_completion(
+                            messages=build_messages(_sys_p, _retry_user, _used_uris, _label),
+                            seed=seed, **_opt_kwargs)
+                        _r_text = _r_out['choices'][0]['message']['content'].removeprefix(": ").strip()
+                        if _opt_matches_skill(_r_text, 生成模式):
+                            opt_text = _r_text
+                    except RuntimeError as e:
+                        if not _is_context_error(e):
+                            raise
 
                 if opt_text is None:
                     # 兜底: 不带图片/视频帧, 仅用反推描述做纯文本优化
@@ -950,7 +1018,7 @@ class llama_cpp_instruct_adv:
                     if _caps:
                         _user_p += "\n\n[Reference Image Captions] (images omitted due to context limit) " + _caps
                     if _video_desc:
-                        _user_p += "\n\n[Reference Video Description] (frames omitted due to context limit) " + _video_desc
+                        _user_p += "\n\n[Source Video Caption] (frames omitted due to context limit) " + _video_desc
                     try:
                         opt_output = LLAMA_CPP_STORAGE.llm.create_chat_completion(
                             messages=build_messages(_sys_p, _user_p, [], _label), seed=seed, **_opt_kwargs)
@@ -988,6 +1056,10 @@ class llama_cpp_instruct_adv:
         user_content = []
         if custom_prompt.strip() and "*" not in preset_prompt:
             user_content.append({"type": "text", "text": custom_prompt})
+            # 提示词优化开启时, 上面的文本本身就是最终提示词; 显式约束主推理不要再把它
+            # 当成问题去回答 / 不要把附带素材重新描述一遍 (否则 output 会退化成素材描述)。
+            if optimized_prompt:
+                user_content.append({"type": "text", "text": MAIN_INFERENCE_PROMPT_RULE})
         else:
             p = preset_prompts[preset_prompt].replace("#", custom_prompt.strip()).replace("@", "video" if video_input else "image")
             user_content.append({"type": "text", "text": p})
