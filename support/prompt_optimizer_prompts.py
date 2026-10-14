@@ -384,6 +384,27 @@ IMAGE_CAPTION_PROMPT = (
 )
 
 
+VIDEO_CAPTION_PROMPT = (
+    "The attached images are frames evenly sampled from ONE video, in chronological order. "
+    "Describe this video as a whole for a text-to-video prompt: the main subject(s) and their appearance, "
+    "the actions and motion evolving over time, camera movement (if any), scene and background, lighting and style. "
+    "Use phrases like 'at first / then / finally' for temporal changes. Output the description only, "
+    "without any preamble."
+)
+
+
+def build_video_reference_block(video_description):
+    """将视频整体反推描述格式化为注入优化请求的文本块。"""
+    desc = (video_description or "").strip()
+    if not desc:
+        return ""
+    return (
+        "[Reference Video] The attached reference labels are frames evenly sampled from ONE video "
+        "in chronological order — treat them as a single video, NOT as separate images.\n"
+        "[Reference Video Description] " + desc
+    )
+
+
 def build_reference_captions_block(image_descriptions):
     """将参考图反推描述格式化为注入优化请求的文本块。Image N 对应 <imageN>/<Picture N>。"""
     if not image_descriptions:
@@ -482,10 +503,11 @@ H3_MODE_HINTS = {
 
 def build_h3_user_message(user_prompt, generation_mode, image_count=0,
                           no_bgm=False, extra_requirements="",
-                          image_descriptions=None):
+                          image_descriptions=None, video_description=None):
     """Build the H3 user message. generation_mode may be the full combo label
     ('H3 - 文生视频 (T2VA)') or the English core name. image_descriptions is the
-    auto-caption list of reference images (index N -> <Picture N+1>)."""
+    auto-caption list of reference images (index N -> <Picture N+1>);
+    video_description is the whole-video caption when the references are video frames."""
     generation_mode = normalize_h3_mode(generation_mode)
     parts = [f"[Generation Mode] {generation_mode}"]
 
@@ -501,8 +523,10 @@ def build_h3_user_message(user_prompt, generation_mode, image_count=0,
         parts.append("[User Original Prompt]\nNo text prompt was provided. Follow the selected mode and use any attached reference images as context.")
 
     if image_count > 0:
+        _vid_block = build_video_reference_block(video_description)
+        _prefix = _vid_block + "\n" if _vid_block else ""
         parts.append(
-            f"[Reference Images] {image_count} image(s) uploaded, labeled <Picture 1>..<Picture {image_count}> in order.\n"
+            f"{_prefix}[Reference Images] {image_count} image(s) uploaded, labeled <Picture 1>..<Picture {image_count}> in order.\n"
             "Please write clear labels and usage for each image. "
             "Analyze subject appearance, scene style, composition, etc. from the images and incorporate into the prompt optimization.\n"
             + (build_reference_captions_block(image_descriptions) + "\n" if image_descriptions else "")
@@ -531,9 +555,11 @@ def build_h3_user_message(user_prompt, generation_mode, image_count=0,
 
 
 def build_qwen_image_user_message(user_prompt, generation_mode, image_count=0,
-                                  extra_requirements="", image_descriptions=None):
+                                  extra_requirements="", image_descriptions=None,
+                                  video_description=None):
     """Build the Qwen-Image-2.1 user message. image_descriptions is the auto-caption
-    list of reference images (index N -> <image N+1>)."""
+    list of reference images (index N -> <image N+1>); video_description is the
+    whole-video caption when the references are video frames."""
     mode_hint = {
         "Qwen-Image-2.1 - 文生图": "Task: text-to-image. Build a complete image description from text.",
         "Qwen-Image-2.1 - 图像编辑": "Task: image editing. Apply only the requested changes and preserve every unrelated visual attribute.",
@@ -602,8 +628,10 @@ def build_qwen_image_user_message(user_prompt, generation_mode, image_count=0,
 
     if image_count > 0:
         refs = ", ".join(f"<image{i + 1}>" for i in range(image_count))
+        _vid_block = build_video_reference_block(video_description)
+        _prefix = _vid_block + "\n" if _vid_block else ""
         parts.append(
-            f"[Reference Images] {image_count} image(s) uploaded: {refs}. "
+            f"{_prefix}[Reference Images] {image_count} image(s) uploaded: {refs}. "
             "Analyze their visible details before writing the optimized prompt.\n"
             + (build_reference_captions_block(image_descriptions) + "\n" if image_descriptions else "")
             + "If the user prompt refers to images by ordinal names such as \"图1/图2\", \"图片1\", or \"image 1\", "

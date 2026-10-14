@@ -23,6 +23,7 @@ from .support.prompt_optimizer_prompts import (
     normalize_h3_mode,
     PROMPT_TRANSLATE_TO_CHINESE_SYSTEM,
     IMAGE_CAPTION_PROMPT,
+    VIDEO_CAPTION_PROMPT,
 )
 
 import folder_paths
@@ -778,26 +779,53 @@ class llama_cpp_instruct_adv:
                 _n_ctx = _model_n_ctx()
                 _reserve = int(_parameters.get("max_tokens", 1024) or 1024) + 64
 
-                # 反推 pass: 逐张描述参考图内容 (单图 + 短提示词, 上下文压力小)
+                # 反推 pass: 图片逐张描述; 视频模式按「一段视频」整体反推 (采样帧 + 时间线描述)
                 opt_captions = []
                 cap_uris = []
+                _video_desc = ""
                 if has_images:
                     _cap_size = _fit_image_size(_estimate_text_tokens(IMAGE_CAPTION_PROMPT), 1, _n_ctx, _reserve)
-                    for img in images:
-                        cap_uris.extend(_image_to_data_uris(img, _cap_size))
-                    for uri in cap_uris:
-                        cap_messages = [
-                            {"role": "user", "content": [
-                                {"type": "text", "text": IMAGE_CAPTION_PROMPT},
-                                {"type": "image_url", "image_url": {"url": uri}},
-                            ]}
-                        ]
-                        try:
-                            cap_out = LLAMA_CPP_STORAGE.llm.create_chat_completion(messages=cap_messages, seed=seed, **_parameters)
-                            opt_captions.append(cap_out['choices'][0]['message']['content'].removeprefix(": ").strip())
-                        except RuntimeError:
-                            # 单张反推失败(如上下文不足)时跳过该图, 不阻断整体流程
-                            opt_captions.append("")
+                    if video_input and len(images) > 1:
+                        # 视频反推: 均匀采样最多 8 帧, 一次调用整体描述动作/运镜/时间变化
+                        opt_images = [images[i] for i in np.linspace(0, len(images) - 1, min(8, len(images)), dtype=int)]
+                        cap_uris = []
+                        for img in opt_images:
+                            cap_uris.extend(_image_to_data_uris(img, _cap_size))
+                        cap_messages = [{"role": "user", "content": [
+                            {"type": "text", "text": VIDEO_CAPTION_PROMPT},
+                        ] + [{"type": "image_url", "image_url": {"url": u}} for u in cap_uris]}]
+                        for _n_try in (len(cap_uris), 4, 2):
+                            if _n_try < len(cap_uris):
+                                # 上下文放不下时减少帧数重试
+                                cap_messages = [{"role": "user", "content": [
+                                    {"type": "text", "text": VIDEO_CAPTION_PROMPT},
+                                ] + [{"type": "image_url", "image_url": {"url": u}} for u in cap_uris[:_n_try]]}]
+                            try:
+                                cap_out = LLAMA_CPP_STORAGE.llm.create_chat_completion(messages=cap_messages, seed=seed, **_parameters)
+                                _video_desc = cap_out['choices'][0]['message']['content'].removeprefix(": ").strip()
+                                cap_uris = cap_uris[:_n_try]
+                                break
+                            except RuntimeError as e:
+                                if not _is_context_error(e):
+                                    raise
+                                continue  # 减帧重试
+                    else:
+                        opt_images = images
+                        for img in images:
+                            cap_uris.extend(_image_to_data_uris(img, _cap_size))
+                        for uri in cap_uris:
+                            cap_messages = [
+                                {"role": "user", "content": [
+                                    {"type": "text", "text": IMAGE_CAPTION_PROMPT},
+                                    {"type": "image_url", "image_url": {"url": uri}},
+                                ]}
+                            ]
+                            try:
+                                cap_out = LLAMA_CPP_STORAGE.llm.create_chat_completion(messages=cap_messages, seed=seed, **_parameters)
+                                opt_captions.append(cap_out['choices'][0]['message']['content'].removeprefix(": ").strip())
+                            except RuntimeError:
+                                # 单张反推失败(如上下文不足)时跳过该图, 不阻断整体流程
+                                opt_captions.append("")
 
                 def _build_opt_pair(image_count):
                     """按图片数量构建 (system_prompt, user_message, image_label)。
@@ -811,12 +839,14 @@ class llama_cpp_instruct_adv:
                         _user = build_h3_user_message(
                             _src, _core, image_count=image_count, no_bgm=无背景音乐,
                             image_descriptions=opt_captions,
+                            video_description=_video_desc,
                         )
                         return _sys, _user, "<Picture {n}>"
                     _sys = build_qwen_image_system_prompt(生成模式, "仅英文")
                     _user = build_qwen_image_user_message(
                         _src, 生成模式, image_count=image_count,
                         image_descriptions=opt_captions,
+                        video_description=_video_desc,
                     )
                     return _sys, _user, "<image{n}>"
 
@@ -837,7 +867,7 @@ class llama_cpp_instruct_adv:
                 for _size in _candidate_sizes(_fit_image_size(_est_tokens, _n_img, _n_ctx, _reserve)):
                     _uris = []
                     if _n_img:
-                        for img in images:
+                        for img in opt_images:
                             _uris.extend(_image_to_data_uris(img, _size))
                     _sys_p, _user_p, _label = _build_opt_pair(len(_uris))
                     try:
@@ -852,11 +882,13 @@ class llama_cpp_instruct_adv:
                         continue
 
                 if opt_text is None:
-                    # 兜底: 不带图片, 仅用反推描述做纯文本优化
+                    # 兜底: 不带图片/视频帧, 仅用反推描述做纯文本优化
                     _sys_p, _user_p, _label = _build_opt_pair(0)
                     _caps = " ".join(f"Image {i + 1}: {c}" for i, c in enumerate(opt_captions) if c)
                     if _caps:
                         _user_p += "\n\n[Reference Image Captions] (images omitted due to context limit) " + _caps
+                    if _video_desc:
+                        _user_p += "\n\n[Reference Video Description] (frames omitted due to context limit) " + _video_desc
                     try:
                         opt_output = LLAMA_CPP_STORAGE.llm.create_chat_completion(
                             messages=build_messages(_sys_p, _user_p, [], _label), seed=seed, **_opt_kwargs)
@@ -1026,7 +1058,8 @@ class llama_cpp_parameters:
     def INPUT_TYPES(s):
         return {
             "required": {
-                "max_tokens": ("INT", {"default": 1024, "min": 0, "max": 4096, "step": 1}),
+                "max_tokens": ("INT", {"default": 1024, "min": 0, "max": 32768, "step": 1,
+                                       "tooltip": "Maximum number of tokens to generate."}),
                 "top_k": ("INT", {"default": 30, "min": 0, "max": 1000, "step": 1}),
                 "top_p": ("FLOAT", {"default": 0.9, "min": 0.0, "max": 1.0, "step": 0.01}),
                 "min_p": ("FLOAT", {"default": 0.05, "min": 0.0, "max": 1.0, "step": 0.01}),
