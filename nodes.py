@@ -628,11 +628,7 @@ class llama_cpp_instruct_adv:
                 "custom_prompt": ("STRING", {"default": "", "multiline": True, "placeholder": 'user_prompt\n\nFor preset hints marked with an "*", this will be used to fill the placeholder (e.g., Object names in BBox detection)\nOtherwise, this will override the preset prompts.'}),
                 "生成模式": (["None"] + PROMPT_OPTIMIZER_MODES, {
                     "default": "None",
-                    "tooltip": "提示词优化: 推理前先用 LLM 将 Prompt 改写为 MiniMax-H3 / Qwen-Image-2.1 专用提示词, 再用优化后的提示词进行主推理。\nNone = 关闭优化。\n参考 ComfyUI-xiaozhuguang (MIT) 移植。"
-                }),
-                "输出语言": (["仅英文", "仅中文", "中英双语"], {
-                    "default": "仅英文",
-                    "tooltip": "提示词优化的输出语言 (仅 生成模式 非 None 时生效)。仅输出一种语言可减少生成 token 和耗时"
+                    "tooltip": "提示词优化: 推理前先用 LLM 将 Prompt 改写为 MiniMax-H3 / Qwen-Image-2.1 专用提示词, 再用优化后的提示词进行主推理。\nNone = 关闭优化。\n优化结果为中英双语 (英文版用于主推理, 中文版便于查看)。\n参考 ComfyUI-xiaozhuguang (MIT) 移植。"
                 }),
                 "无背景音乐": ("BOOLEAN", {
                     "default": False,
@@ -703,7 +699,7 @@ class llama_cpp_instruct_adv:
                         item["image_url"]["url"] = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAACXBIWXMAAAsTAAALEwEAmpwYAAAADElEQVQImWP4//8/AAX+Av5Y8msOAAAAAElFTkSuQmCC"
         return clean_messages
     
-    def process(self, llama_model, preset_prompt, custom_prompt, 生成模式, 输出语言, 无背景音乐, system_prompt, inference_mode, max_frames, max_size, seed, force_offload, save_states, unique_id, parameters=None, images=None, image_1=None, image_2=None, image_3=None, image_4=None, image_5=None, image_6=None, image_7=None, image_8=None, image_9=None, image_10=None):
+    def process(self, llama_model, preset_prompt, custom_prompt, 生成模式, 无背景音乐, system_prompt, inference_mode, max_frames, max_size, seed, force_offload, save_states, unique_id, parameters=None, images=None, image_1=None, image_2=None, image_3=None, image_4=None, image_5=None, image_6=None, image_7=None, image_8=None, image_9=None, image_10=None):
         # 合并所有图像输入（含旧版工作流使用的 images 批量槽），平坦化为单张图像列表（不限制尺寸）
         all_images = []
         if images is not None:
@@ -768,7 +764,6 @@ class llama_cpp_instruct_adv:
         # 推理前先用 LLM 将输入 Prompt 改写为专用优化提示词, 再用优化结果进行主推理。
         # 参考 ComfyUI-xiaozhuguang (MIT License, Copyright (c) 2025 xiaozhuguang) 移植。
         optimized_prompt = ""
-        _opt_lang = 输出语言 if 输出语言 in ("仅英文", "仅中文", "中英双语") else "仅英文"
         if 生成模式 and 生成模式 != "None" and "*" not in preset_prompt:
             _src = custom_prompt.strip()
             if not _src:
@@ -805,16 +800,20 @@ class llama_cpp_instruct_adv:
                             opt_captions.append("")
 
                 def _build_opt_pair(image_count):
-                    """按图片数量构建 (system_prompt, user_message, image_label)。"""
+                    """按图片数量构建 (system_prompt, user_message, image_label)。
+
+                    优化主输出固定为英文 (skill 规范原生语言, 模型遵循度最好),
+                    中文版由独立的翻译 pass 生成, 保证用户始终能读到中文结果。
+                    """
                     if 生成模式.startswith("H3"):
                         _core = normalize_h3_mode(生成模式)
-                        _sys = build_h3_system_prompt("仅英文" if _opt_lang == "中英双语" else _opt_lang)
+                        _sys = build_h3_system_prompt("仅英文")
                         _user = build_h3_user_message(
                             _src, _core, image_count=image_count, no_bgm=无背景音乐,
                             image_descriptions=opt_captions,
                         )
                         return _sys, _user, "<Picture {n}>"
-                    _sys = build_qwen_image_system_prompt(生成模式, "仅英文" if _opt_lang == "中英双语" else _opt_lang)
+                    _sys = build_qwen_image_system_prompt(生成模式, "仅英文")
                     _user = build_qwen_image_user_message(
                         _src, 生成模式, image_count=image_count,
                         image_descriptions=opt_captions,
@@ -871,17 +870,19 @@ class llama_cpp_instruct_adv:
                             ) from e
                         raise
 
-                # 双语: 第二次推理将英文精确翻译为中文; 主推理使用英文版
-                if _opt_lang == "中英双语":
-                    zh_messages = build_messages(
-                        PROMPT_TRANSLATE_TO_CHINESE_SYSTEM,
-                        "[English prompt to translate]\n" + opt_text,
-                    )
+                # 固定双语: 翻译 pass 将英文优化结果精确转为中文; 主推理使用英文版
+                zh_messages = build_messages(
+                    PROMPT_TRANSLATE_TO_CHINESE_SYSTEM,
+                    "[English prompt to translate]\n" + opt_text,
+                )
+                try:
                     zh_output = LLAMA_CPP_STORAGE.llm.create_chat_completion(messages=zh_messages, seed=seed, **_parameters)
                     opt_zh = zh_output['choices'][0]['message']['content'].removeprefix(": ").strip()
-                    optimized_prompt = opt_text + "\n\n" + opt_zh
-                else:
-                    optimized_prompt = opt_text
+                except RuntimeError as e:
+                    if not _is_context_error(e):
+                        raise
+                    opt_zh = ""  # 翻译失败时仅输出英文版
+                optimized_prompt = opt_text + ("\n\n" + opt_zh if opt_zh else "")
 
                 # 优化后的提示词替换原始 custom_prompt 进入主推理
                 custom_prompt = opt_text
